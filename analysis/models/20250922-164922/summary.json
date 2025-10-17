@@ -1,0 +1,141 @@
+{
+  "config": {
+    "features_path": "analysis/features/players.csv",
+    "min_hands": 2000,
+    "tasks": [
+      "regression",
+      "classification"
+    ],
+    "weight_strategy": "log_hand_count",
+    "k_folds": 5,
+    "seed": 2024
+  },
+  "metrics": {
+    "regression": {
+      "rmse": 43.469,
+      "mae": 35.314,
+      "r2": 0.0,
+      "baseline": true,
+      "backend": "weighted_mean"
+    },
+    "classification": {
+      "accuracy": 0.549,
+      "precision": 0.549,
+      "recall": 1.0,
+      "f1": 0.709,
+      "baseline": true,
+      "backend": "majority_class",
+      "samples": 11,
+      "thresholds": {
+        "q1": -340.33,
+        "q3": -271.12
+      }
+    }
+  },
+  "top_correlations": [
+    {
+      "feature": "vpip_pct",
+      "pearson": -0.834
+    },
+    {
+      "feature": "cold_call_pct",
+      "pearson": -0.6937
+    },
+    {
+      "feature": "vpip_pfr_gap_pct",
+      "pearson": -0.6746
+    },
+    {
+      "feature": "pfr_pct",
+      "pearson": -0.6728
+    },
+    {
+      "feature": "avg_stack_bb",
+      "pearson": -0.5482
+    },
+    {
+      "feature": "fold_to_cbet_river_pct",
+      "pearson": 0.4179
+    },
+    {
+      "feature": "rake_bb_per_100",
+      "pearson": -0.417
+    },
+    {
+      "feature": "cbet_river_count",
+      "pearson": -0.4076
+    },
+    {
+      "feature": "cbet_turn_count",
+      "pearson": -0.2985
+    },
+    {
+      "feature": "cbet_river_pct",
+      "pearson": -0.2949
+    },
+    {
+      "feature": "steal_attempt_pct",
+      "pearson": -0.2902
+    },
+    {
+      "feature": "cbet_flop_pct",
+      "pearson": -0.2846
+    },
+    {
+      "feature": "cbet_river_opps",
+      "pearson": -0.2644
+    },
+    {
+      "feature": "cbet_turn_pct",
+      "pearson": -0.2624
+    },
+    {
+      "feature": "cbet_turn_opps",
+      "pearson": -0.2569
+    },
+    {
+      "feature": "hands_utg2",
+      "pearson": 0.2468
+    },
+    {
+      "feature": "aggression_bets",
+      "pearson": -0.2413
+    },
+    {
+      "feature": "cold_call_count",
+      "pearson": -0.2141
+    },
+    {
+      "feature": "fold_to_cbet_flop_count",
+      "pearson": -0.2053
+    },
+    {
+      "feature": "multiway_flop_pct",
+      "pearson": -0.1937
+    },
+    {
+      "feature": "three_bet_pct",
+      "pearson": -0.1875
+    },
+    {
+      "feature": "cbet_flop_count",
+      "pearson": -0.1792
+    },
+    {
+      "feature": "steal_success_pct",
+      "pearson": 0.1792
+    },
+    {
+      "feature": "multiway_flops",
+      "pearson": -0.172
+    },
+    {
+      "feature": "hands_utg1",
+      "pearson": 0.1718
+    }
+  ],
+  "notes": [
+    "Regression fallback baseline used (install LightGBM/ElasticNet for full modelling).",
+    "Classification fallback baseline used (install LightGBM/sklearn for advanced modelling)."
+  ]
+}

@@ -1,0 +1,283 @@
+{
+  "players": {
+    "count": 6,
+    "hands_total": 77674.0,
+    "hands_mean": 12945.7,
+    "hands_median": 14043.0,
+    "hands_max": 14932.0
+  },
+  "metrics": {
+    "bb_per_100": {
+      "count": 6,
+      "mean": -15.52,
+      "median": -8.59,
+      "stdev": 23.411,
+      "min": -46.84,
+      "q1": -43.85,
+      "q3": -6.8,
+      "max": 20.68
+    },
+    "vpip_pct": {
+      "count": 6,
+      "mean": 31.757,
+      "median": 29.86,
+      "stdev": 2.874,
+      "min": 29.54,
+      "q1": 29.77,
+      "q3": 29.87,
+      "max": 36.63
+    },
+    "pfr_pct": {
+      "count": 6,
+      "mean": 17.9,
+      "median": 18.64,
+      "stdev": 4.514,
+      "min": 8.96,
+      "q1": 17.09,
+      "q3": 19.31,
+      "max": 23.69
+    },
+    "vpip_pfr_gap_pct": {
+      "count": 6,
+      "mean": 13.857,
+      "median": 12.255,
+      "stdev": 4.115,
+      "min": 9.49,
+      "q1": 10.46,
+      "q3": 12.94,
+      "max": 20.89
+    },
+    "three_bet_pct": {
+      "count": 6,
+      "mean": 6.1,
+      "median": 6.66,
+      "stdev": 1.668,
+      "min": 2.59,
+      "q1": 5.95,
+      "q3": 7.12,
+      "max": 7.55
+    },
+    "cold_call_pct": {
+      "count": 6,
+      "mean": 22.012,
+      "median": 18.69,
+      "stdev": 6.051,
+      "min": 16.78,
+      "q1": 17.24,
+      "q3": 19.86,
+      "max": 32.09
+    },
+    "fold_to_3bet_pct": {
+      "count": 6,
+      "mean": 40.09,
+      "median": 43.345,
+      "stdev": 8.796,
+      "min": 21.88,
+      "q1": 37.56,
+      "q3": 44.71,
+      "max": 47.25
+    },
+    "cbet_flop_pct": {
+      "count": 6,
+      "mean": 52.63,
+      "median": 51.605,
+      "stdev": 3.921,
+      "min": 48.26,
+      "q1": 49.72,
+      "q3": 51.97,
+      "max": 60.36
+    },
+    "cbet_turn_pct": {
+      "count": 6,
+      "mean": 50.735,
+      "median": 50.69,
+      "stdev": 3.869,
+      "min": 43.62,
+      "q1": 49.5,
+      "q3": 51.38,
+      "max": 55.7
+    },
+    "cbet_river_pct": {
+      "count": 6,
+      "mean": 53.142,
+      "median": 51.815,
+      "stdev": 7.369,
+      "min": 43.52,
+      "q1": 47.73,
+      "q3": 52.05,
+      "max": 66.67
+    }
+  },
+  "leaderboards": {
+    "top_winners": [
+      {
+        "player_id": "BTN",
+        "bb_per_100": 20.68,
+        "hands": 14932
+      },
+      {
+        "player_id": "UTG+1",
+        "bb_per_100": -5.93,
+        "hands": 12091
+      },
+      {
+        "player_id": "UTG",
+        "bb_per_100": -6.8,
+        "hands": 13683
+      }
+    ],
+    "top_losers": [
+      {
+        "player_id": "SB",
+        "bb_per_100": -46.84,
+        "hands": 14932
+      },
+      {
+        "player_id": "BB",
+        "bb_per_100": -43.85,
+        "hands": 14403
+      },
+      {
+        "player_id": "UTG+2",
+        "bb_per_100": -10.38,
+        "hands": 7633
+      }
+    ],
+    "vpip_high": [
+      {
+        "player_id": "BTN",
+        "vpip_pct": 36.63,
+        "hands": 14932
+      },
+      {
+        "player_id": "SB",
+        "vpip_pct": 34.88,
+        "hands": 14932
+      },
+      {
+        "player_id": "UTG",
+        "vpip_pct": 29.87,
+        "hands": 13683
+      }
+    ],
+    "vpip_low": [
+      {
+        "player_id": "UTG+2",
+        "vpip_pct": 29.54,
+        "hands": 7633
+      },
+      {
+        "player_id": "UTG+1",
+        "vpip_pct": 29.77,
+        "hands": 12091
+      },
+      {
+        "player_id": "BB",
+        "vpip_pct": 29.85,
+        "hands": 14403
+      }
+    ]
+  },
+  "correlations": [
+    {
+      "feature": "fold_to_cbet_flop_pct",
+      "pearson": -0.9306
+    },
+    {
+      "feature": "cbet_river_pct",
+      "pearson": -0.8839
+    },
+    {
+      "feature": "pfr_pct",
+      "pearson": 0.826
+    },
+    {
+      "feature": "fold_to_3bet_count",
+      "pearson": 0.806
+    },
+    {
+      "feature": "vpip_pfr_gap_pct",
+      "pearson": -0.7578
+    },
+    {
+      "feature": "fold_to_3bet_opps",
+      "pearson": 0.7315
+    },
+    {
+      "feature": "squeeze_opps",
+      "pearson": -0.7292
+    },
+    {
+      "feature": "squeeze_count",
+      "pearson": -0.715
+    },
+    {
+      "feature": "wwsf_pct",
+      "pearson": 0.7127
+    },
+    {
+      "feature": "hands_btn",
+      "pearson": 0.6953
+    },
+    {
+      "feature": "fold_to_cbet_flop_count",
+      "pearson": -0.6868
+    },
+    {
+      "feature": "cbet_flop_pct",
+      "pearson": -0.6665
+    },
+    {
+      "feature": "cold_call_count",
+      "pearson": -0.6658
+    },
+    {
+      "feature": "fold_to_cbet_turn_count",
+      "pearson": -0.6276
+    },
+    {
+      "feature": "fold_to_cbet_flop_opps",
+      "pearson": -0.6222
+    },
+    {
+      "feature": "cold_call_opps",
+      "pearson": -0.6031
+    },
+    {
+      "feature": "three_bet_opps",
+      "pearson": -0.6031
+    },
+    {
+      "feature": "pfr_count",
+      "pearson": 0.599
+    },
+    {
+      "feature": "hands_sb",
+      "pearson": -0.5983
+    },
+    {
+      "feature": "three_bet_count",
+      "pearson": -0.5871
+    },
+    {
+      "feature": "cbet_flop_opps",
+      "pearson": 0.5711
+    },
+    {
+      "feature": "multiway_flops",
+      "pearson": -0.5694
+    },
+    {
+      "feature": "fold_to_3bet_pct",
+      "pearson": 0.5542
+    },
+    {
+      "feature": "fold_to_cbet_turn_opps",
+      "pearson": -0.5514
+    },
+    {
+      "feature": "aggression_bets",
+      "pearson": -0.5417
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Environment
+.venv/
+__pycache__/
+
+# Local data caches
+var/
+drivehud/
+
+# Generated artifacts
+.cache/
+*.pyc
+frontend/node_modules/
+frontend/dist/

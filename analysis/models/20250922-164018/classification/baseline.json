@@ -1,0 +1,9 @@
+{
+  "prediction": 1,
+  "positive_rate": 0.5491285820582879,
+  "thresholds": {
+    "q1": -340.33,
+    "q3": -271.12
+  },
+  "weight_strategy": "log_hand_count"
+}

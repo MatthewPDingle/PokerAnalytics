@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "poker-analytics"
+version = "0.1.0"
+description = "Browser-based analytics and visualization suite for poker hand histories."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "sqlmodel>=0.0.16",
+    "duckdb>=0.9",
+    "polars>=0.20",
+    "pandas>=2.2",
+    "plotly>=5.19",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.1",
+    "ruff>=0.3",
+    "black>=24.2",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

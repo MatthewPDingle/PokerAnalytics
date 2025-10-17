@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: poker-analytics
+Version: 0.1.0
+Summary: Browser-based analytics and visualization suite for poker hand histories.
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn[standard]>=0.29
+Requires-Dist: pydantic>=2.6
+Requires-Dist: sqlmodel>=0.0.16
+Requires-Dist: duckdb>=0.9
+Requires-Dist: polars>=0.20
+Requires-Dist: pandas>=2.2
+Requires-Dist: plotly>=5.19
+Provides-Extra: dev
+Requires-Dist: pytest>=8.1; extra == "dev"
+Requires-Dist: ruff>=0.3; extra == "dev"
+Requires-Dist: black>=24.2; extra == "dev"

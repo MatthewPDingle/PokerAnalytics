@@ -1,0 +1,102 @@
+[
+  {
+    "feature": "vpip_pct",
+    "mean_abs_shap": 15.875388541280067
+  },
+  {
+    "feature": "avg_stack_bb",
+    "mean_abs_shap": 7.292600544392465
+  },
+  {
+    "feature": "cold_call_count",
+    "mean_abs_shap": 5.990224391475245
+  },
+  {
+    "feature": "pfr_pct",
+    "mean_abs_shap": 4.076926994703939
+  },
+  {
+    "feature": "three_bet_pct",
+    "mean_abs_shap": 3.5460506015667432
+  },
+  {
+    "feature": "fold_to_3bet_opps",
+    "mean_abs_shap": 3.0366323826067263
+  },
+  {
+    "feature": "cbet_turn_opps",
+    "mean_abs_shap": 2.9707723387040765
+  },
+  {
+    "feature": "four_bet_opps",
+    "mean_abs_shap": 2.6562347934616692
+  },
+  {
+    "feature": "cold_call_pct",
+    "mean_abs_shap": 2.3496591772554734
+  },
+  {
+    "feature": "fold_to_cbet_turn_pct",
+    "mean_abs_shap": 2.150529214442037
+  },
+  {
+    "feature": "rake_bb_per_100",
+    "mean_abs_shap": 2.1033456862392574
+  },
+  {
+    "feature": "cbet_river_pct",
+    "mean_abs_shap": 2.003409331522789
+  },
+  {
+    "feature": "cbet_turn_count",
+    "mean_abs_shap": 1.5571343414555707
+  },
+  {
+    "feature": "aggression_bets",
+    "mean_abs_shap": 1.4633729701436538
+  },
+  {
+    "feature": "cbet_flop_pct",
+    "mean_abs_shap": 1.2910943525570777
+  },
+  {
+    "feature": "four_bet_pct",
+    "mean_abs_shap": 1.1110768380576954
+  },
+  {
+    "feature": "fold_to_cbet_turn_opps",
+    "mean_abs_shap": 1.108494632902187
+  },
+  {
+    "feature": "fold_to_3bet_pct",
+    "mean_abs_shap": 1.0473463673378025
+  },
+  {
+    "feature": "squeeze_count",
+    "mean_abs_shap": 0.966529920414252
+  },
+  {
+    "feature": "pfr_count",
+    "mean_abs_shap": 0.9420296463715121
+  },
+  {
+    "feature": "aggression_calls",
+    "mean_abs_shap": 0.695600701915501
+  },
+  {
+    "feature": "cbet_river_opps",
+    "mean_abs_shap": 0.5373325074909259
+  },
+  {
+    "feature": "hands_utg2",
+    "mean_abs_shap": 0.4859511471798749
+  },
+  {
+    "feature": "squeeze_opps",
+    "mean_abs_shap": 0.4619943016405462
+  },
+  {
+    "feature": "cbet_turn_pct",
+    "mean_abs_shap": 0.45061921858796705
+  }
+]
