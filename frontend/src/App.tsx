@@ -7,6 +7,7 @@ import PreflopShoveExplorer from './pages/PreflopShoveExplorer';
 import OpponentCountPerformance from './pages/OpponentCountPerformance';
 import PerformanceOverview from './pages/PerformanceOverview';
 import PreflopResponseCurves from './pages/PreflopResponseCurves';
+import FlopResponseMatrix from './pages/FlopResponseMatrix';
 
 const App = () => (
   <Box minH="100vh" bgGradient="linear(to-b, gray.900, gray.800)">
@@ -14,6 +15,7 @@ const App = () => (
     <Divider opacity={0.2} />
     <Routes>
       <Route path="/" element={<LandingPage />} />
+      <Route path="/flop/response-matrix" element={<FlopResponseMatrix />} />
       <Route path="/preflop-shove-explorer" element={<PreflopShoveExplorer />} />
       <Route path="/preflop/response-curves" element={<PreflopResponseCurves />} />
       <Route path="/performance/opponent-count" element={<OpponentCountPerformance />} />

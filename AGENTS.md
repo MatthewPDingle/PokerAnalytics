@@ -48,6 +48,7 @@ src/                    # (planned) application code
 frontend/               # (planned) React application root (Vite + Chakra)
 ```
 - Maintain `analysis/` as read-only reference until logic is ported. Do not delete or edit legacy notebooks unless backfilling context.
+- Treat `analysis/` as archival content only; do not place new caches, generated data, or scripts in that directory.
 - Dependency management: standard `python -m venv` + `pip install -e .[dev]` (see `scripts/bootstrap_env.*`).
 
 ## Legacy Resources to Reuse
@@ -84,9 +85,19 @@ Implementations live in `src/poker_analytics/data/textures.py` (see below) and p
 | `60-80%` | `[0.60, 0.80)` |
 | `80-100%` | `[0.80, 1.00)` |
 | `100-125%` | `[1.00, 1.25)` |
-| `125%+` | `[1.25, inf)` |
+| `125-200%` | `[1.25, 2.00)` |
+| `200-300%` | `[2.00, 3.00)` |
+| `300%+` | `[3.00, inf)` |
 
 Stored in `src/poker_analytics/data/bet_sizing.py`. Always normalize bet sizes by pot size before bucketizing.
+
+### Flop Bet Taxonomy
+- **Continuation bet (c-bet)**: The player who executed the last preflop raise fires the flop regardless of position or caller count.
+- **Donk bet**: A non-aggressor seated out of position leads into the preflop aggressor before that aggressor acts on the flop.
+- **Stab / other flop bets**: Any flop bet that is neither a c-bet nor a donk. Typical cases include betting after the preflop aggressor checks or betting in limped pots with no aggressor.
+- **Stab vs missed c-bet**: Specific subset of “other” bets where the preflop aggressor checks and another player bets afterward.
+- **Limped pots**: With no preflop raise there is no aggressor; every flop bet is a generic lead/bet (treated as part of the “other” bucket).
+- **Multiway & 3/4-bet pots**: The preflop aggressor remains the only potential c-bettor. Earlier-position players who lead before the aggressor act are donking; bets made after the aggressor checks revert to the “other” classification.
 
 ### Preflop Shove Analysis
 - Backend exposes `/api/preflop/shove/ranges` for shove distributions split by category (13x13 grid).

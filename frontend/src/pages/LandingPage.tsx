@@ -3,6 +3,11 @@ import { Link as RouterLink } from 'react-router-dom';
 
 const PAGES = [
   {
+    title: 'Flop Response Matrix',
+    description: 'Villain fold/call/raise rates by flop bet size with classification and position filters.',
+    to: '/flop/response-matrix',
+  },
+  {
     title: 'Preflop Shove Explorer',
     description: 'Population shove frequencies, hand-group summaries, and simulated equity/EV heatmaps.',
     to: '/preflop-shove-explorer',

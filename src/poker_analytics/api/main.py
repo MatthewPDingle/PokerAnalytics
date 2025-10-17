@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from poker_analytics.services.flop_loader import load_flop_bet_summary
+from poker_analytics.services.flop_response_matrix import load_flop_response_matrix
 
 router = APIRouter(prefix="/api", tags=["core"])
 
@@ -30,3 +31,8 @@ async def metadata() -> dict[str, str]:
 @router.get("/flop/summary", summary="Flop bet-size summary")
 async def flop_summary() -> dict:
     return load_flop_bet_summary()
+
+
+@router.get("/flop/response-matrix", summary="Flop bet response matrix")
+async def flop_response_matrix() -> dict:
+    return load_flop_response_matrix()

@@ -15,7 +15,7 @@ class BetSizingTests(unittest.TestCase):
         self.assertEqual(bucket_for_ratio(0.25), BET_SIZE_BUCKETS[1])
         self.assertEqual(bucket_for_ratio(0.9999), BET_SIZE_BUCKETS[4])
         self.assertEqual(bucket_for_ratio(1.25), BET_SIZE_BUCKETS[6])
-        self.assertEqual(bucket_for_ratio(3.5), BET_SIZE_BUCKETS[6])
+        self.assertEqual(bucket_for_ratio(3.5), BET_SIZE_BUCKETS[-1])
 
     def test_bucket_for_ratio_invalid_values(self) -> None:
         self.assertIsNone(bucket_for_ratio(None))
