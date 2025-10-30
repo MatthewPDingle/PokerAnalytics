@@ -12,6 +12,11 @@ export type FlopResponseMetric = {
   foldEvents: number;
   callEvents: number;
   raiseEvents: number;
+  avgRatio: number;
+  avgAddedFlopBb: number;
+  avgAddedAllBb: number;
+  avgShareAll: number;
+  avgBreakevenPct: number;
 };
 
 export type FlopResponseScenario = {
@@ -45,6 +50,11 @@ type RawPayload = {
       fold_events: number;
       call_events: number;
       raise_events: number;
+      avg_ratio?: number;
+      avg_added_flop_bb?: number;
+      avg_added_all_bb?: number;
+      avg_share_all?: number;
+      avg_breakeven_pct?: number;
     }>;
   }>;
 };
@@ -59,6 +69,7 @@ const SAMPLE_BUCKET_ORDER: FlopBucketMeta[] = [
   { key: 'pct_125_200', label: '125-200%' },
   { key: 'pct_200_300', label: '200-300%' },
   { key: 'pct_300_plus', label: '300%+' },
+  { key: 'pct_125_plus', label: '125%+' },
   { key: 'all_in', label: 'All-In' },
   { key: 'one_bb', label: '1 BB' },
 ];
@@ -79,6 +90,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 110,
             callEvents: 80,
             raiseEvents: 30,
+            avgRatio: 0.5,
+            avgAddedFlopBb: 3.0,
+            avgAddedAllBb: 5.0,
+            avgShareAll: 1.8,
+            avgBreakevenPct: 33.3,
           };
         case 'pct_60_80':
           return {
@@ -88,6 +104,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 70,
             callEvents: 85,
             raiseEvents: 30,
+            avgRatio: 0.7,
+            avgAddedFlopBb: 3.8,
+            avgAddedAllBb: 6.2,
+            avgShareAll: 2.0,
+            avgBreakevenPct: 41.2,
           };
         case 'pct_80_100':
           return {
@@ -97,6 +118,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 60,
             callEvents: 70,
             raiseEvents: 30,
+            avgRatio: 0.9,
+            avgAddedFlopBb: 4.5,
+            avgAddedAllBb: 7.4,
+            avgShareAll: 2.4,
+            avgBreakevenPct: 47.4,
           };
         case 'pct_100_125':
           return {
@@ -106,6 +132,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 45,
             callEvents: 55,
             raiseEvents: 20,
+            avgRatio: 1.1,
+            avgAddedFlopBb: 5.2,
+            avgAddedAllBb: 8.8,
+            avgShareAll: 2.8,
+            avgBreakevenPct: 52.4,
           };
         case 'pct_125_200':
           return {
@@ -115,6 +146,25 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 35,
             callEvents: 45,
             raiseEvents: 10,
+            avgRatio: 1.6,
+            avgAddedFlopBb: 6.0,
+            avgAddedAllBb: 10.5,
+            avgShareAll: 3.4,
+            avgBreakevenPct: 61.5,
+          };
+        case 'pct_125_plus':
+          return {
+            bucketKey: bucket.key,
+            bucketLabel: bucket.label,
+            events: 90,
+            foldEvents: 35,
+            callEvents: 45,
+            raiseEvents: 10,
+            avgRatio: 2.5,
+            avgAddedFlopBb: 6.5,
+            avgAddedAllBb: 12.0,
+            avgShareAll: 3.8,
+            avgBreakevenPct: 71.4,
           };
         case 'all_in':
           return {
@@ -124,6 +174,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 8,
             callEvents: 10,
             raiseEvents: 7,
+            avgRatio: 3.5,
+            avgAddedFlopBb: 7.0,
+            avgAddedAllBb: 14.0,
+            avgShareAll: 4.2,
+            avgBreakevenPct: 77.8,
           };
         case 'one_bb':
           return {
@@ -133,6 +188,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 20,
             callEvents: 22,
             raiseEvents: 6,
+            avgRatio: 0.05,
+            avgAddedFlopBb: 0.8,
+            avgAddedAllBb: 1.2,
+            avgShareAll: 0.9,
+            avgBreakevenPct: 4.8,
           };
         default:
           return {
@@ -142,6 +202,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             foldEvents: 0,
             callEvents: 0,
             raiseEvents: 0,
+            avgRatio: 0,
+            avgAddedFlopBb: 0,
+            avgAddedAllBb: 0,
+            avgShareAll: 0,
+            avgBreakevenPct: 0,
           };
       }
     }),
@@ -160,6 +225,26 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
           foldEvents: 18,
           callEvents: 32,
           raiseEvents: 10,
+          avgRatio: 0.3,
+          avgAddedFlopBb: 2.0,
+          avgAddedAllBb: 4.5,
+          avgShareAll: 1.5,
+          avgBreakevenPct: 23.1,
+        };
+      }
+      if (bucket.key === 'pct_125_plus') {
+        return {
+          bucketKey: bucket.key,
+          bucketLabel: bucket.label,
+          events: 0,
+          foldEvents: 0,
+          callEvents: 0,
+          raiseEvents: 0,
+          avgRatio: 0,
+          avgAddedFlopBb: 0,
+          avgAddedAllBb: 0,
+          avgShareAll: 0,
+          avgBreakevenPct: 0,
         };
       }
       return {
@@ -169,6 +254,11 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
         foldEvents: 0,
         callEvents: 0,
         raiseEvents: 0,
+        avgRatio: 0,
+        avgAddedFlopBb: 0,
+        avgAddedAllBb: 0,
+        avgShareAll: 0,
+        avgBreakevenPct: 0,
       };
     }),
   },
@@ -222,6 +312,11 @@ const transformPayload = (payload: RawPayload): HookState => {
       foldEvents: metric.fold_events,
       callEvents: metric.call_events,
       raiseEvents: metric.raise_events,
+      avgRatio: metric.avg_ratio ?? 0,
+      avgAddedFlopBb: metric.avg_added_flop_bb ?? 0,
+      avgAddedAllBb: metric.avg_added_all_bb ?? 0,
+      avgShareAll: metric.avg_share_all ?? 0,
+      avgBreakevenPct: metric.avg_breakeven_pct ?? 0,
     })),
   }));
 
@@ -231,7 +326,7 @@ const transformPayload = (payload: RawPayload): HookState => {
     betTypes: payload.bet_types,
     positions: payload.positions,
     playerCounts: payload.player_counts,
-     heroPositions: payload.hero_positions,
+    heroPositions: payload.hero_positions,
     loading: false,
     error: null,
     usingSample: false,

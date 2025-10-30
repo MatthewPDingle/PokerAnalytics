@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
 from poker_analytics.data.drivehud import DriveHudDataSource
+from poker_analytics.data.stakes import StakePolicy
 
 CALL_TYPES = {"3"}
 RAISE_TYPES = {"7", "23"}
@@ -250,6 +251,7 @@ def _parse_game(
     game: ET.Element,
     hero_name: str,
     session_gametype: Optional[str],
+    stake_policy: StakePolicy,
 ) -> Optional[tuple[int, str, int, float, float, bool, bool, bool, bool]]:
     players_section = game.find('./general/players')
     if players_section is None:
@@ -288,6 +290,8 @@ def _parse_game(
 
     big_blind = _extract_big_blind(game, session_gametype)
     if not big_blind:
+        return None
+    if not stake_policy.matches(big_blind):
         return None
 
     net = hero['win'] - hero['bet']
@@ -341,6 +345,8 @@ def get_opponent_count_performance() -> List[dict[str, object]]:
     if not source.is_available():
         return []
 
+    stake_policy = StakePolicy.from_environment()
+
     overall: Dict[int, Accumulator] = defaultdict(Accumulator)
     by_position: Dict[int, Dict[str, Accumulator]] = defaultdict(lambda: defaultdict(Accumulator))
     timeline_records: List[tuple[str, float, Optional[int], int]] = []
@@ -381,7 +387,7 @@ def get_opponent_count_performance() -> List[dict[str, object]]:
                 hand_number_value = None
 
         for game in session.findall('game'):
-            parsed = _parse_game(game, hero_name, gametype)
+            parsed = _parse_game(game, hero_name, gametype, stake_policy)
             if not parsed:
                 continue
             (

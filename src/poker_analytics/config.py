@@ -14,6 +14,7 @@ from typing import Iterable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CACHE_DIR = REPO_ROOT / "var" / "cache"
+DEFAULT_ALLOWED_BIG_BLINDS = (0.10,)
 
 # Ordered by preference: Windows path, WSL mount, repo-local copy.
 DEFAULT_DRIVEHUD_CANDIDATES = (
@@ -72,6 +73,35 @@ def resolve_cache_dir() -> Path:
     return DEFAULT_CACHE_DIR
 
 
+def resolve_allowed_big_blinds() -> tuple[float, ...]:
+    """Return the set of big blind stakes the application should include.
+
+    The ``POKER_ANALYTICS_ALLOWED_BIG_BLINDS`` environment variable accepts a
+    comma- or semicolon-delimited list of numeric big blind amounts. Providing
+    ``*`` disables filtering and includes every available stake.
+    """
+
+    raw = os.getenv("POKER_ANALYTICS_ALLOWED_BIG_BLINDS")
+    if raw is None or not raw.strip():
+        return DEFAULT_ALLOWED_BIG_BLINDS
+
+    tokens = [token.strip() for token in raw.replace(";", ",").split(",") if token.strip()]
+    if not tokens:
+        return DEFAULT_ALLOWED_BIG_BLINDS
+
+    if any(token == "*" for token in tokens):
+        return ()
+
+    values: list[float] = []
+    for token in tokens:
+        try:
+            values.append(float(token))
+        except ValueError:
+            continue
+
+    return tuple(values) if values else DEFAULT_ALLOWED_BIG_BLINDS
+
+
 def build_data_paths() -> DataPaths:
     """Construct a `DataPaths` instance using resolution helpers."""
 
@@ -85,7 +115,9 @@ __all__ = [
     "DataPaths",
     "DEFAULT_CACHE_DIR",
     "DEFAULT_DRIVEHUD_CANDIDATES",
+    "DEFAULT_ALLOWED_BIG_BLINDS",
     "build_data_paths",
     "resolve_cache_dir",
     "resolve_drivehud_path",
+    "resolve_allowed_big_blinds",
 ]

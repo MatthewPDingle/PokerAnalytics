@@ -12,6 +12,7 @@ from typing import Dict, Iterable, List, Optional
 from poker_analytics.config import build_data_paths
 from poker_analytics.data.cards import CARD_RANKS, SUITS, extract_big_blind, parse_cards_text
 from poker_analytics.data.drivehud import DriveHudDataSource
+from poker_analytics.data.stakes import StakePolicy
 
 BET_TYPES = {"5", "7"}
 RAISE_TYPES = {"23", "7"}
@@ -140,7 +141,10 @@ def load_preflop_shove_events(
     """Materialise shove events from the DriveHUD database (with optional caching)."""
 
     source = source or DriveHudDataSource.from_defaults()
-    cache_path = cache_path or (build_data_paths().cache_dir / "preflop_shove_events.json")
+    stake_policy = StakePolicy.from_environment()
+    cache_path = cache_path or (
+        build_data_paths().cache_dir / f"preflop_shove_events_{stake_policy.cache_token()}.json"
+    )
 
     if not force and cache_path.exists():
         with cache_path.open("r", encoding="utf-8") as fh:
@@ -163,6 +167,8 @@ def load_preflop_shove_events(
 
         big_blind = extract_big_blind(root)
         if not big_blind:
+            continue
+        if not stake_policy.matches(big_blind):
             continue
 
         pocket_cards: Dict[str, List[tuple[str, int, str]]] = {}

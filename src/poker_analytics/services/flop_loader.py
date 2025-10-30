@@ -8,6 +8,7 @@ from typing import Iterable, Optional
 from poker_analytics.data.bet_sizing import BET_SIZE_BUCKETS, bucket_for_ratio
 from poker_analytics.data.drivehud import DriveHudDataSource
 from poker_analytics.data.textures import FLOP_TEXTURE_SPECS, texture_keys
+from poker_analytics.data.stakes import StakePolicy, load_hand_identifiers_for_policy
 
 FLOP_SUMMARY_QUERY = """
     SELECT h.hand_id,
@@ -41,6 +42,9 @@ def load_flop_bet_summary(source: Optional[DriveHudDataSource] = None) -> dict:
     if not source.is_available():
         return _empty_summary()
 
+    stake_policy = StakePolicy.from_environment()
+    identifiers = load_hand_identifiers_for_policy(source, stake_policy)
+
     bucket_counts: Counter[str] = Counter()
     texture_counts: Counter[str] = Counter()
     events = 0
@@ -51,6 +55,11 @@ def load_flop_bet_summary(source: Optional[DriveHudDataSource] = None) -> dict:
         return _empty_summary()
 
     for row in rows:
+        if identifiers is not None:
+            hand_identifier = row.get("hand_id") or row.get("HandHistoryId") or row.get("HandNumber")
+            if not identifiers.contains(hand_identifier):
+                continue
+
         ratio = _normalise_ratio(row.get("bet_ratio"))
         bucket = bucket_for_ratio(ratio)
         if bucket is not None:

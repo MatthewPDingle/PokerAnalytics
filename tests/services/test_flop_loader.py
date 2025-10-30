@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from poker_analytics.data.drivehud import DriveHudDataSource
 from poker_analytics.services.flop_loader import load_flop_bet_summary
@@ -13,6 +14,10 @@ from poker_analytics.services.flop_loader import load_flop_bet_summary
 
 class FlopLoaderTests(unittest.TestCase):
     def setUp(self) -> None:
+        env_patch = mock.patch.dict("os.environ", {"POKER_ANALYTICS_ALLOWED_BIG_BLINDS": "*"})
+        self.addCleanup(env_patch.stop)
+        env_patch.start()
+
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
         self.db_path = Path(tmp.name)

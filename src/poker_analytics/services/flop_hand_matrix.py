@@ -1,0 +1,228 @@
+"""Aggregations for hero flop hand categories across bet-size buckets."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
+
+from poker_analytics.config import build_data_paths
+from poker_analytics.data.flop_hand_categories import (
+    DRAW_CATEGORIES,
+    GROUP_DEFINITIONS,
+    PRIMARY_HAND_TYPES,
+)
+from poker_analytics.data.stakes import StakePolicy
+from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, BUCKET_KEYS, bucket_keys_for_event
+from poker_analytics.services.flop_response_matrix_builder import collect_flop_bet_events
+
+HAND_TYPE_ORDER: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES)
+HAND_TYPE_SET = set(HAND_TYPE_ORDER)
+
+BET_TYPE_LABELS: Mapping[str, str] = {
+    "cbet": "Continuation Bet",
+    "donk": "Donk Bet",
+    "stab": "Stab / Other",
+}
+
+POSITION_LABELS: Mapping[str, str] = {
+    "IP": "In Position",
+    "OOP": "Out of Position",
+}
+
+HERO_POSITION_ORDER: Sequence[str] = [
+    "SB",
+    "BB",
+    "UTG",
+    "UTG+1",
+    "UTG+2",
+    "LJ",
+    "HJ",
+    "CO",
+    "BTN",
+    "UNKNOWN",
+]
+
+
+def load_flop_hand_matrix() -> dict:
+    """Return aggregated hero hand distributions by flop bet sizing."""
+
+    stake_policy = StakePolicy.from_environment()
+    data_paths = build_data_paths()
+    cache_path = data_paths.cache_dir / f"flop_hand_matrix_{stake_policy.cache_token()}.json"
+
+    if cache_path.exists():
+        try:
+            with cache_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if payload.get("version") == CURRENT_VERSION:
+                return payload
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    data_paths.ensure_cache_dir()
+
+    events = collect_flop_bet_events()
+    payload = _aggregate(events)
+
+    try:
+        with cache_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+    except OSError:
+        pass
+
+    return payload
+
+
+def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
+    scenario_map: Dict[Tuple[str, str, str, int], Dict[str, Dict[str, object]]] = {}
+    hero_positions: set[str] = set()
+    bet_types: set[str] = set()
+    positions: set[str] = set()
+    player_counts: set[int] = set()
+
+    for event in events:
+        primary = event.get("hand_primary")
+        if not isinstance(primary, str) or primary not in HAND_TYPE_SET:
+            primary = "Air"
+
+        bucket_keys = bucket_keys_for_event(event)
+        if not bucket_keys:
+            continue
+
+        hero_position = str(event.get("hero_position") or "UNKNOWN")
+        bet_type = str(event.get("bet_type") or "")
+        in_position = "IP" if bool(event.get("in_position")) else "OOP"
+
+        player_count_value = event.get("player_count")
+        try:
+            player_count = int(player_count_value)
+        except (TypeError, ValueError):
+            continue
+        if player_count <= 0:
+            continue
+
+        scenario_key = (hero_position, bet_type, in_position, player_count)
+        bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
+
+        hero_positions.add(hero_position)
+        if bet_type:
+            bet_types.add(bet_type)
+        positions.add(in_position)
+        player_counts.add(player_count)
+
+        for bucket_key in bucket_keys:
+            stats = bucket_map.get(bucket_key)
+            if stats is None:
+                continue
+            stats["events"] += 1
+            stats["categories"][primary] += 1
+            if bool(event.get("has_flush_draw")):
+                stats["categories"]["Flush Draw"] += 1
+            if bool(event.get("has_oesd_dg")):
+                stats["categories"]["OESD/DG"] += 1
+
+    scenario_payload: List[dict] = []
+    for (hero_position, bet_type, in_position, player_count), bucket_map in sorted(
+        scenario_map.items(),
+        key=lambda item: (
+            _hero_position_rank(item[0][0]),
+            _bet_type_rank(item[0][1]),
+            0 if item[0][2] == "IP" else 1,
+            item[0][3],
+        ),
+    ):
+        metrics = []
+        for meta in BUCKET_METADATA:
+            stats = bucket_map[meta.key]
+            metrics.append(
+                {
+                    "bucket_key": meta.key,
+                    "bucket_label": meta.label,
+                    "events": stats["events"],
+                    "categories": dict(stats["categories"]),
+                }
+            )
+        scenario_payload.append(
+            {
+                "hero_position": hero_position,
+                "bet_type": bet_type,
+                "position": in_position,
+                "player_count": player_count,
+                "metrics": metrics,
+            }
+        )
+
+    bucket_order = [meta.__dict__ for meta in BUCKET_METADATA]
+
+    hand_types = [
+        {"key": label, "label": label, "kind": "primary"}
+        for label in PRIMARY_HAND_TYPES
+    ] + [
+        {"key": label, "label": label, "kind": "draw"}
+        for label in DRAW_CATEGORIES
+    ]
+
+    groupings = [
+        {
+            "key": "grouped",
+            "label": "Grouped View",
+            "groups": [
+                {"key": group_label, "label": group_label, "members": list(members)}
+                for group_label, members in GROUP_DEFINITIONS
+            ],
+        }
+    ]
+
+    bet_type_options = [
+        {"key": key, "label": BET_TYPE_LABELS.get(key, key.title())}
+        for key in sorted(bet_types, key=_bet_type_rank)
+    ]
+
+    position_options = [
+        {"key": key, "label": POSITION_LABELS.get(key, key)}
+        for key in sorted(positions, key=lambda value: 0 if value == "IP" else 1)
+    ]
+
+    hero_positions_ordered = sorted(hero_positions, key=_hero_position_rank)
+
+    return {
+        "version": CURRENT_VERSION,
+        "bucket_order": bucket_order,
+        "hand_types": hand_types,
+        "groupings": groupings,
+        "bet_types": bet_type_options,
+        "positions": position_options,
+        "hero_positions": hero_positions_ordered,
+        "player_counts": sorted(player_counts),
+        "scenarios": scenario_payload,
+    }
+
+
+def _initial_bucket_map() -> Dict[str, Dict[str, object]]:
+    return {
+        meta.key: {
+            "events": 0,
+            "categories": {label: 0 for label in HAND_TYPE_ORDER},
+        }
+        for meta in BUCKET_METADATA
+    }
+
+
+def _bet_type_rank(key: str) -> int:
+    ordering = ["cbet", "donk", "stab"]
+    try:
+        return ordering.index(key)
+    except ValueError:
+        return len(ordering)
+
+
+def _hero_position_rank(label: str) -> int:
+    try:
+        return HERO_POSITION_ORDER.index(label)
+    except ValueError:
+        return len(HERO_POSITION_ORDER)
+
+
+__all__ = ["load_flop_hand_matrix"]
+CURRENT_VERSION = 1

@@ -102,7 +102,12 @@ Stored in `src/poker_analytics/data/bet_sizing.py`. Always normalize bet sizes b
 ### Preflop Shove Analysis
 - Backend exposes `/api/preflop/shove/ranges` for shove distributions split by category (13x13 grid).
 - `/api/preflop/shove/equity` returns simulated equity/EV grids (aligned with the legacy heatmaps).
-- Data leverages parsed DriveHUD XML with caches in `var/cache/preflop_shove_events.json` and `preflop_equity.json` (legacy cache copied on first run).
+- Data leverages parsed DriveHUD XML with caches in `var/cache/preflop_shove_events_<stake>.json` and `preflop_equity.json` (legacy cache copied on first run).
+- Flop aggregations cache per-stake payloads (`flop_response_matrix_<stake>.json`, `flop_hand_matrix_<stake>.json`) under `var/cache/`.
+
+### Stake Filtering
+- Set `POKER_ANALYTICS_ALLOWED_BIG_BLINDS` (comma/semicolon delimited) to limit analytics to specific cash-game stakes; use `*` to disable filtering.
+- Cache files include the stake token (`bb_0p1`, etc.) to keep per-stake extracts isolated under `var/cache/`.
 
 ## Development Workflow & Best Practices
 - Treat data contracts as APIs. Any change to schemas, bucket definitions, or poker terminology must update documentation and tests.

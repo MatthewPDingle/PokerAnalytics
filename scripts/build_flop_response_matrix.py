@@ -22,7 +22,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--output",
         type=Path,
         default=None,
-        help="Explicit output path for the cache file (defaults to var/cache/flop_response_matrix.json)",
+        help="Explicit output path for the cache file (defaults to stake-scoped cache under var/cache/)",
     )
     return parser.parse_args(argv)
 
@@ -36,4 +36,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     raise SystemExit(main())
-

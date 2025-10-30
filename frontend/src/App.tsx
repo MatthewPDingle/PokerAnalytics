@@ -8,6 +8,7 @@ import OpponentCountPerformance from './pages/OpponentCountPerformance';
 import PerformanceOverview from './pages/PerformanceOverview';
 import PreflopResponseCurves from './pages/PreflopResponseCurves';
 import FlopResponseMatrix from './pages/FlopResponseMatrix';
+import LineExplorer from './pages/LineExplorer';
 
 const App = () => (
   <Box minH="100vh" bgGradient="linear(to-b, gray.900, gray.800)">
@@ -20,6 +21,7 @@ const App = () => (
       <Route path="/preflop/response-curves" element={<PreflopResponseCurves />} />
       <Route path="/performance/opponent-count" element={<OpponentCountPerformance />} />
       <Route path="/performance/overview" element={<PerformanceOverview />} />
+      <Route path="/lines/explorer" element={<LineExplorer />} />
     </Routes>
   </Box>
 );

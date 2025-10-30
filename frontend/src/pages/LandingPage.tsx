@@ -8,6 +8,11 @@ const PAGES = [
     to: '/flop/response-matrix',
   },
   {
+    title: 'Line Explorer',
+    description: 'Analyze multi-street betting lines such as flop check-call into turn bets with responder breakdowns.',
+    to: '/lines/explorer',
+  },
+  {
     title: 'Preflop Shove Explorer',
     description: 'Population shove frequencies, hand-group summaries, and simulated equity/EV heatmaps.',
     to: '/preflop-shove-explorer',
