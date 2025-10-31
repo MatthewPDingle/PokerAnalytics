@@ -46,6 +46,12 @@ describe('tableComposer sequencing', () => {
       expect(seat.startingStack).toBe(100);
     });
   });
+  it('initializes empty board cards', () => {
+    const state = createInitialTableComposerState();
+    expect(state.board.flop).toEqual([]);
+    expect(state.board.turn).toEqual([]);
+    expect(state.board.river).toEqual([]);
+  });
 
   it('retains preflop placeholders after first action', () => {
     let state = createInitialTableComposerState();
@@ -107,5 +113,22 @@ describe('tableComposer sequencing', () => {
     });
 
     expect(state.streetSequences.river.map((step) => step.seatId)).toEqual(['seat-BB', 'seat-UTG']);
+  });
+
+  it('lets the preflop aggressor respond after raise and call', () => {
+    let state = createInitialTableComposerState();
+
+    state = applySeatAction(state, 'seat-HJ', 'preflop', { action: 'open' });
+    state = applySeatAction(state, 'seat-CO', 'preflop', { action: 'raise' });
+    state = applySeatAction(state, 'seat-BB', 'preflop', { action: 'call' });
+
+    expect(() => {
+      state = applySeatAction(state, 'seat-HJ', 'preflop', { action: 'call' });
+    }).not.toThrow();
+
+    const hjSteps = state.streetSequences.preflop.filter((step) => step.seatId === 'seat-HJ');
+    expect(hjSteps.length).toBeGreaterThan(1);
+    const lastStepId = hjSteps[hjSteps.length - 1].id;
+    expect(state.stepActions[lastStepId]).toEqual({ action: 'call' });
   });
 });

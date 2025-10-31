@@ -71,6 +71,7 @@ export type TableComposerState = {
   streetSequences: Record<Street, StreetActionStep[]>;
   stepActions: Record<string, SeatAction>;
   nextStepId: number;
+  board: Record<'flop' | 'turn' | 'river', string[]>;
 };
 
 export type TableComposerSnapshot = Omit<TableComposerState, 'history' | 'future'>;
@@ -85,6 +86,7 @@ export type TableComposerAction =
   | { type: 'set_exclude_hero'; exclude: boolean }
   | { type: 'set_table_size'; size: number }
   | { type: 'apply_actions'; items: Array<{ seatId: string; street: Street; action: SeatAction | null }> }
+  | { type: 'set_board_cards'; street: 'flop' | 'turn' | 'river'; cards: string[] }
   | {
       type: 'apply_step_changes';
       street: Street;
@@ -109,6 +111,12 @@ const REMOVAL_PRIORITY: SeatPosition[] = ['UTG+1', 'UTG+2', 'UTG+3', 'LJ', 'UTG'
 
 export const PRE_FLOP_SEQUENCE_ORDER: SeatPosition[] = ['UTG', 'UTG+1', 'UTG+2', 'UTG+3', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'];
 export const POST_FLOP_SEQUENCE_ORDER: SeatPosition[] = ['SB', 'BB', 'UTG', 'UTG+1', 'UTG+2', 'UTG+3', 'LJ', 'HJ', 'CO', 'BTN'];
+
+const CARD_RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+const CARD_SUITS = ['s', 'h', 'd', 'c'];
+const CARD_RANK_SET = new Set(CARD_RANKS);
+const CARD_SUIT_SET = new Set(CARD_SUITS);
+const FULL_DECK: string[] = CARD_SUITS.flatMap((suit) => CARD_RANKS.map((rank) => `${rank}${suit}`));
 
 const DEFAULT_PRESET: TableComposerPreset = {
   seats: DEFAULT_SEAT_ORDER.map((position) => ({
@@ -213,24 +221,40 @@ const ensurePreflopCoverage = (
   createId: () => string,
 ) => {
   const activeSeats = orderSeatsByPositions(seats, PRE_FLOP_SEQUENCE_ORDER);
-  const existingSteps = sequences.preflop ?? [];
-  const reuseMap = new Map<string, StreetActionStep[]>();
-  existingSteps.forEach((step) => {
-    const list = reuseMap.get(step.seatId) ?? [];
-    list.push(step);
-    reuseMap.set(step.seatId, list);
+  const activeSeatIds = new Set(activeSeats.map((seat) => seat.seatId));
+  const existingSteps = (sequences.preflop ?? []).filter((step) => {
+    if (activeSeatIds.has(step.seatId)) {
+      return true;
+    }
+    if (stepActions[step.id]) {
+      delete stepActions[step.id];
+    }
+    return false;
   });
+
+  const queues = new Map<string, StreetActionStep[]>();
+  existingSteps.forEach((step) => {
+    const list = queues.get(step.seatId);
+    if (list) {
+      list.push(step);
+    } else {
+      queues.set(step.seatId, [step]);
+    }
+  });
+
+  const usedStepIds = new Set<string>();
   const rebuilt: StreetActionStep[] = activeSeats.map((seat) => {
-    const list = reuseMap.get(seat.seatId);
-    if (list && list.length) {
-      return list.shift()!;
+    const list = queues.get(seat.seatId);
+    if (list && list.length > 0) {
+      const step = list.shift()!;
+      usedStepIds.add(step.id);
+      return step;
     }
     return { id: createId(), seatId: seat.seatId };
   });
-  reuseMap.forEach((list) => {
-    list.forEach((step) => delete stepActions[step.id]);
-  });
-  sequences.preflop = rebuilt;
+
+  const leftovers = existingSteps.filter((step) => !usedStepIds.has(step.id));
+  sequences.preflop = [...rebuilt, ...leftovers];
 };
 
 const isAggressiveStepAction = (action?: SeatAction): boolean => {
@@ -570,6 +594,11 @@ const takeSnapshot = (state: TableComposerState): TableComposerSnapshot => ({
   streetSequences: cloneSequences(state.streetSequences),
   stepActions: cloneStepActions(state.stepActions),
   nextStepId: state.nextStepId,
+  board: {
+    flop: [...state.board.flop],
+    turn: [...state.board.turn],
+    river: [...state.board.river],
+  },
 });
 
 const restoreSnapshot = (snapshot: TableComposerSnapshot, history: TableComposerSnapshot[], future: TableComposerSnapshot[]): TableComposerState => ({
@@ -583,6 +612,11 @@ const restoreSnapshot = (snapshot: TableComposerSnapshot, history: TableComposer
   streetSequences: cloneSequences(snapshot.streetSequences),
   stepActions: cloneStepActions(snapshot.stepActions),
   nextStepId: snapshot.nextStepId,
+  board: {
+    flop: [...snapshot.board.flop],
+    turn: [...snapshot.board.turn],
+    river: [...snapshot.board.river],
+  },
   history,
   future,
 });
@@ -610,6 +644,11 @@ export const createInitialTableComposerState = (preset: TableComposerPreset = DE
     streetSequences: sequences,
     stepActions: {},
     nextStepId,
+    board: {
+      flop: [],
+      turn: [],
+      river: [],
+    },
   };
 };
 
@@ -656,7 +695,9 @@ export const tableComposerReducer: Reducer<TableComposerState, TableComposerActi
       STREET_ORDER.forEach((street) => {
         ensureContinuationSteps(street, prunedSequences, prunedActions, normalizedSeats, () => createStepId(nextStepId++));
       });
+      pruneFutureStreetsAfterIncomplete(prunedSequences, prunedActions);
       const syncedSeats = syncSeatActionsWithSteps(normalizedSeats, prunedSequences, prunedActions);
+      const reconciledBoard = reconcileBoard(prunedSequences, prunedActions, next.board);
       return {
         ...next,
         seats: syncedSeats,
@@ -666,6 +707,7 @@ export const tableComposerReducer: Reducer<TableComposerState, TableComposerActi
         streetSequences: prunedSequences,
         stepActions: prunedActions,
         nextStepId,
+        board: reconciledBoard,
       };
     }
     case 'set_button': {
@@ -758,7 +800,9 @@ export const tableComposerReducer: Reducer<TableComposerState, TableComposerActi
       STREET_ORDER.forEach((street) => {
         ensureContinuationSteps(street, prunedSequences, prunedActions, updatedSeats, () => createStepId(nextStepId++));
       });
+      pruneFutureStreetsAfterIncomplete(prunedSequences, prunedActions);
       const syncedSeats = syncSeatActionsWithSteps(updatedSeats, prunedSequences, prunedActions);
+      const reconciledBoard = reconcileBoard(prunedSequences, prunedActions, next.board);
       return {
         ...next,
         seats: syncedSeats,
@@ -768,6 +812,7 @@ export const tableComposerReducer: Reducer<TableComposerState, TableComposerActi
         streetSequences: prunedSequences,
         stepActions: prunedActions,
         nextStepId,
+        board: reconciledBoard,
       };
     }
     case 'apply_actions': {
@@ -827,12 +872,14 @@ export const tableComposerReducer: Reducer<TableComposerState, TableComposerActi
       pruneFutureStreetsAfterIncomplete(updatedSequences, updatedActions);
 
       const syncedSeats = syncSeatActionsWithSteps(next.seats, updatedSequences, updatedActions);
+      const reconciledBoard = reconcileBoard(updatedSequences, updatedActions, next.board);
       return {
         ...next,
         seats: syncedSeats,
         streetSequences: updatedSequences,
         stepActions: updatedActions,
         nextStepId,
+        board: reconciledBoard,
       };
     }
     case 'apply_step_changes': {
@@ -920,6 +967,7 @@ export const tableComposerReducer: Reducer<TableComposerState, TableComposerActi
       pruneFutureStreetsAfterIncomplete(updatedSequences, updatedActions);
 
       const syncedSeats = syncSeatActionsWithSteps(next.seats, updatedSequences, updatedActions);
+      const reconciledBoard = reconcileBoard(updatedSequences, updatedActions, next.board);
 
       return {
         ...next,
@@ -927,6 +975,25 @@ export const tableComposerReducer: Reducer<TableComposerState, TableComposerActi
         streetSequences: updatedSequences,
         stepActions: updatedActions,
         nextStepId,
+        board: reconciledBoard,
+      };
+    }
+    case 'set_board_cards': {
+      const next = pushHistory(state);
+      const targetCount = action.street === 'flop' ? 3 : 1;
+      const normalized = action.cards
+        .map((card) => normalizeCardToken(card))
+        .filter((card): card is string => Boolean(card));
+      const unique = Array.from(new Set(normalized)).slice(0, targetCount);
+      const overrideBoard: Record<'flop' | 'turn' | 'river', string[]> = {
+        flop: action.street === 'flop' ? unique : next.board.flop,
+        turn: action.street === 'turn' ? unique : next.board.turn,
+        river: action.street === 'river' ? unique : next.board.river,
+      };
+      const reconciledBoard = reconcileBoard(next.streetSequences, next.stepActions, overrideBoard);
+      return {
+        ...next,
+        board: reconciledBoard,
       };
     }
     case 'undo': {
@@ -1154,4 +1221,116 @@ const deriveActivePositions = (size: number): SeatPosition[] => {
     }
   }
   return positions;
+};
+
+const normalizeCardToken = (token: string | null | undefined): string | null => {
+  if (!token) {
+    return null;
+  }
+  const trimmed = token.trim();
+  if (trimmed.length < 2) {
+    return null;
+  }
+  let suitChar = trimmed[trimmed.length - 1].toLowerCase();
+  if (!CARD_SUIT_SET.has(suitChar)) {
+    return null;
+  }
+  let rankPart = trimmed.slice(0, trimmed.length - 1).toUpperCase();
+  if (rankPart === '10') {
+    rankPart = 'T';
+  }
+  if (!CARD_RANK_SET.has(rankPart)) {
+    return null;
+  }
+  return `${rankPart}${suitChar}`;
+};
+
+const sanitizeBoardSection = (cards: string[] | undefined, limit: number, taken: Set<string>): string[] => {
+  if (!cards || cards.length === 0) {
+    return [];
+  }
+  const sanitized: string[] = [];
+  for (const raw of cards) {
+    if (sanitized.length >= limit) {
+      break;
+    }
+    const normalized = normalizeCardToken(raw);
+    if (!normalized || taken.has(normalized)) {
+      continue;
+    }
+    sanitized.push(normalized);
+    taken.add(normalized);
+  }
+  return sanitized;
+};
+
+const drawRandomCard = (taken: Set<string>): string | null => {
+  const available = FULL_DECK.filter((card) => !taken.has(card));
+  if (!available.length) {
+    return null;
+  }
+  const index = Math.floor(Math.random() * available.length);
+  const card = available[index];
+  taken.add(card);
+  return card;
+};
+
+const fillBoardSection = (
+  cards: string[],
+  limit: number,
+  taken: Set<string>,
+  shouldFill: boolean,
+): string[] => {
+  if (!shouldFill) {
+    return [];
+  }
+  const result = [...cards];
+  while (result.length < limit) {
+    const card = drawRandomCard(taken);
+    if (!card) {
+      break;
+    }
+    result.push(card);
+  }
+  return result;
+};
+
+const reconcileBoard = (
+  sequences: Record<Street, StreetActionStep[]>,
+  stepActions: Record<string, SeatAction>,
+  currentBoard: Record<'flop' | 'turn' | 'river', string[]>,
+): Record<'flop' | 'turn' | 'river', string[]> => {
+  const board = currentBoard ?? { flop: [], turn: [], river: [] };
+  const completionMap = computeCompletionMap(sequences, stepActions);
+  const taken = new Set<string>();
+
+  if (!completionMap.preflop) {
+    return { flop: [], turn: [], river: [] };
+  }
+
+  const flopSanitized = sanitizeBoardSection(board.flop, 3, taken);
+  const showFlop = completionMap.preflop;
+  const flopCards = fillBoardSection(flopSanitized, 3, taken, showFlop);
+
+  if (!completionMap.flop) {
+    return { flop: flopCards, turn: [], river: [] };
+  }
+
+  const turnSanitized = sanitizeBoardSection(board.turn, 1, taken);
+  const showTurn = completionMap.flop && flopCards.length === 3;
+  const turnCards = fillBoardSection(turnSanitized, 1, taken, showTurn);
+
+  if (!completionMap.turn) {
+    return { flop: flopCards, turn: turnCards, river: [] };
+  }
+
+  const riverSanitized = sanitizeBoardSection(board.river, 1, taken);
+  const showRiver = completionMap.turn && turnCards.length === 1;
+  const riverCards = fillBoardSection(riverSanitized, 1, taken, showRiver);
+
+  return {
+    flop: flopCards,
+    turn: turnCards,
+    river: riverCards,
+  };
 };

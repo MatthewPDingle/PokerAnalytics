@@ -18,6 +18,8 @@ import {
   SliderFilledTrack,
   SliderThumb,
   SliderTrack,
+  HStack,
+  SimpleGrid,
   Stack,
   Table,
   Tbody,
@@ -102,6 +104,64 @@ type PotTimeline = {
 };
 
 const DEFAULT_STACK_SIZE = 100;
+type BoardStreet = 'flop' | 'turn' | 'river';
+const BOARD_CARD_RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+const BOARD_CARD_SUITS = ['s', 'h', 'd', 'c'] as const;
+const SUIT_SYMBOLS: Record<string, string> = { s: '♠', h: '♥', d: '♦', c: '♣' };
+const SUIT_COLORS: Record<
+  string,
+  {
+    defaultText: string;
+    selectedText: string;
+    selectedBg: string;
+    buttonBg: string;
+    buttonBorder: string;
+    disabled: string;
+  }
+> = {
+  s: {
+    defaultText: 'whiteAlpha.900',
+    selectedText: '#1A202C',
+    selectedBg: 'whiteAlpha.900',
+    buttonBg: 'blackAlpha.800',
+    buttonBorder: 'whiteAlpha.700',
+    disabled: 'whiteAlpha.300',
+  },
+  h: {
+    defaultText: '#E53E3E',
+    selectedText: '#E53E3E',
+    selectedBg: 'whiteAlpha.900',
+    buttonBg: 'blackAlpha.700',
+    buttonBorder: 'red.400',
+    disabled: 'whiteAlpha.300',
+  },
+  d: {
+    defaultText: '#4299E1',
+    selectedText: '#3182CE',
+    selectedBg: 'whiteAlpha.900',
+    buttonBg: 'blackAlpha.700',
+    buttonBorder: 'blue.400',
+    disabled: 'whiteAlpha.300',
+  },
+  c: {
+    defaultText: '#48BB78',
+    selectedText: '#38A169',
+    selectedBg: 'whiteAlpha.900',
+    buttonBg: 'blackAlpha.700',
+    buttonBorder: 'green.400',
+    disabled: 'whiteAlpha.300',
+  },
+};
+const BOARD_STREETS: BoardStreet[] = ['flop', 'turn', 'river'];
+const BOARD_CARD_ROW_HEIGHT = 32;
+const BOARD_CARD_WIDTH = 30;
+
+type BoardEditorState = {
+  street: BoardStreet;
+  required: number;
+  selected: Set<string>;
+  disabled: Set<string>;
+};
 
 const BUCKET_REPRESENTATIVE_RATIO: Record<string, number> = {
   pct_0_25: 0.125,
@@ -483,10 +543,37 @@ const findFoldStreetBefore = (seat: SeatState, street: Street): Street | null =>
   return null;
 };
 
+const renderBoardCardToken = (card: string) => {
+  const rank = card[0] ?? '';
+  const suit = card[card.length - 1]?.toLowerCase() ?? '';
+  const symbol = SUIT_SYMBOLS[suit] ?? '';
+  const palette = SUIT_COLORS[suit] ?? SUIT_COLORS.s;
+  return (
+    <Box
+      key={card}
+      borderWidth="1px"
+      borderRadius="md"
+      px={1.5}
+      py={0.5}
+      bg="blackAlpha.700"
+      borderColor={palette.buttonBorder}
+      minW={`${BOARD_CARD_WIDTH}px`}
+      textAlign="center"
+    >
+      <Text fontFamily="mono" fontWeight="semibold" color={palette.defaultText} fontSize="xs">
+        {rank}
+        {symbol}
+      </Text>
+    </Box>
+  );
+};
+
 const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixComposerProps) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const boardModal = useDisclosure();
   const toast = useToast();
   const [editorState, setEditorState] = useState<EditorState | null>(null);
+  const [boardEditorState, setBoardEditorState] = useState<BoardEditorState | null>(null);
 
   const seatMap = useMemo(() => {
     const map = new Map<string, SeatState>();
@@ -577,10 +664,35 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
     onClose();
   };
 
+  const openBoardEditor = (street: BoardStreet) => {
+    const required = street === 'flop' ? 3 : 1;
+    const currentCards = state.board[street] ?? [];
+    const disabled = new Set([...state.board.flop, ...state.board.turn, ...state.board.river]);
+    currentCards.forEach((card) => disabled.delete(card));
+    setBoardEditorState({
+      street,
+      required,
+      selected: new Set(currentCards),
+      disabled,
+    });
+    boardModal.onOpen();
+  };
+
+  const closeBoardEditor = () => {
+    setBoardEditorState(null);
+    boardModal.onClose();
+  };
+
+  const handleBoardSave = (street: BoardStreet, cards: string[]) => {
+    dispatch({ type: 'set_board_cards', street, cards });
+    closeBoardEditor();
+  };
+
   const showPotForStreet = (street: Street) =>
     STREET_ORDER.indexOf(street) <= currentStreetIndex && (streetStartPot[street] ?? 0) > 0;
 
   const showPotForPosition = currentStreetIndex >= 0 && blindsTotal > 0;
+  const showAnyBoard = BOARD_STREETS.some((street) => (state.board[street] ?? []).length > 0);
 
   return (
     <Stack spacing={4} w="full">
@@ -601,9 +713,18 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
         </ButtonGroup>
       </Flex>
 
-      <Flex gap={4} overflowX="auto" align="stretch">
-        <Box minW="140px" borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg">
-          <Table size="sm" variant="simple">
+      <Flex gap={4} overflowX="auto" overflowY="visible" align="stretch">
+        <Stack key="position" spacing={showAnyBoard ? 2 : 0} align="center" minW="140px">
+          {showAnyBoard ? (
+            <Box
+              h={`${BOARD_CARD_ROW_HEIGHT}px`}
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+            />
+          ) : null}
+          <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" w="full">
+            <Table size="sm" variant="simple">
             <Thead>
               <Tr>
                 <Th textAlign="center">
@@ -647,21 +768,43 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
                 );
               })}
             </Tbody>
-          </Table>
-        </Box>
+            </Table>
+          </Box>
+        </Stack>
 
         {STREET_ORDER.map((street) => {
           const sequence = state.streetSequences[street] ?? [];
           const canEditStreet = isStreetEditable(streetCompletion, street);
           const showPot = showPotForStreet(street);
+          const isBoardStreet = street === 'flop' || street === 'turn' || street === 'river';
+          const boardCards = isBoardStreet ? state.board[street as BoardStreet] ?? [] : [];
+          const showBoard = isBoardStreet && boardCards.length > 0;
           return (
-            <Box key={street} minW="160px" borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg">
-              <Table size="sm" variant="simple">
-                <Thead>
-                  <Tr>
-                    <Th textAlign="center">
-                      <Stack spacing={1} align="center">
-                        <Text fontWeight="semibold">{streetHeader(street)}</Text>
+            <Stack key={street} spacing={showBoard || showAnyBoard ? 2 : 0} align="center" minW="160px">
+              {(showBoard || showAnyBoard) && (
+                <Box
+                  h={`${BOARD_CARD_ROW_HEIGHT}px`}
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                >
+                  {showBoard ? (
+                    <HStack spacing={1.5} align="center">
+                      {boardCards.map((card) => renderBoardCardToken(card))}
+                      <Button size="xs" variant="link" onClick={() => openBoardEditor(street as BoardStreet)}>
+                        Edit
+                      </Button>
+                    </HStack>
+                  ) : null}
+                </Box>
+              )}
+              <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" w="full">
+                <Table size="sm" variant="simple">
+                  <Thead>
+                    <Tr>
+                      <Th textAlign="center">
+                        <Stack spacing={1} align="center">
+                          <Text fontWeight="semibold">{streetHeader(street)}</Text>
                         <Text fontSize="xs" color="whiteAlpha.600" visibility={showPot ? 'visible' : 'hidden'}>
                           {showPot ? `${formatBB(streetStartPot[street] ?? 0)} ${BIG_BLIND_SYMBOL}` : '\u00A0'}
                         </Text>
@@ -745,8 +888,9 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
                     })
                   )}
                 </Tbody>
-              </Table>
-            </Box>
+                </Table>
+              </Box>
+            </Stack>
           );
         })}
       </Flex>
@@ -826,6 +970,12 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
           closeEditor();
         }}
       />
+      <BoardEditorModal
+        state={boardEditorState}
+        isOpen={boardModal.isOpen && Boolean(boardEditorState)}
+        onClose={closeBoardEditor}
+        onSave={handleBoardSave}
+      />
     </Stack>
   );
 };
@@ -862,7 +1012,13 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
   const minRaiseTarget = Math.max(minRaiseTo, contribution + toCall);
 
   const sliderMax = maxContribution;
-  const sliderMin = Math.min(sliderMax, Math.max(minRaiseTarget, contribution + toCall));
+  let sliderMin = Math.max(minRaiseTarget, contribution + toCall);
+  if (isPreflopStreet && choice === 'call') {
+    sliderMin = Math.max(contribution + toCall, 0);
+  } else if (!isPreflopStreet) {
+    sliderMin = Math.max(sliderMin, 1);
+  }
+  sliderMin = Math.min(sliderMin, sliderMax);
 
   const ratioCandidates = useMemo(() => {
     const seen = new Set<number>();
@@ -995,8 +1151,22 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
     let sizing: SeatAction['sizing'] | undefined;
     let plannedContribution: number | null = null;
 
-    if (choice === 'bet' || choice === 'raise') {
-      const amountValue = effectiveBetAmount;
+    if (choice === 'call') {
+      const planned = contribution + toCall;
+      if (planned > stackCap + 1e-6) {
+        toast({
+          title: 'Call exceeds remaining stack.',
+          description: `${state.seat.position} has ${formatBB(stackBefore)} ${BIG_BLIND_SYMBOL} available.`,
+          status: 'warning',
+          duration: 2500,
+          isClosable: true,
+        });
+        return;
+      }
+      plannedContribution = planned;
+      // sizing remains undefined for calls
+    } else if (choice === 'bet' || choice === 'raise') {
+      let amountValue = effectiveBetAmount;
       if (!Number.isFinite(amountValue) || amountValue <= 0) {
         toast({ title: 'Enter a valid bet size.', status: 'warning', duration: 2000, isClosable: true });
         return;
@@ -1023,9 +1193,15 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
       }
 
       if (isPreflopStreet) {
-        const incremental = Math.max(amountValue - contribution, 0);
-        sizing = { kind: 'bb_multiple', value: incremental };
-        plannedContribution = amountValue;
+        if (choice === 'call') {
+          sizing = undefined;
+          plannedContribution = contribution + toCall;
+          amountValue = contribution + toCall;
+        } else {
+          const incremental = Math.max(amountValue - contribution, 0);
+          sizing = { kind: 'bb_multiple', value: incremental };
+          plannedContribution = amountValue;
+        }
       } else {
         const ratioValue = potBefore > 0 && amountValue > 0 ? amountValue / potBefore : amountValue;
         sizing = { kind: 'pot_ratio', value: ratioValue };
@@ -1114,6 +1290,145 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
                 </Text>
               </Stack>
             )}
+          </Stack>
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="ghost" mr={3} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button colorScheme="blue" onClick={handleSave}>
+            Save
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+};
+
+type BoardEditorModalProps = {
+  state: BoardEditorState | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (street: BoardStreet, cards: string[]) => void;
+};
+
+const BoardEditorModal = ({ state, isOpen, onClose, onSave }: BoardEditorModalProps) => {
+  const toast = useToast();
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (state) {
+      setSelection(new Set(state.selected));
+    } else {
+      setSelection(new Set());
+    }
+  }, [state, isOpen]);
+
+  if (!state) {
+    return null;
+  }
+
+  const handleToggle = (card: string) => {
+    if (state.disabled.has(card) && !selection.has(card)) {
+      return;
+    }
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(card)) {
+        next.delete(card);
+        return next;
+      }
+      if (next.size >= state.required) {
+        return next;
+      }
+      next.add(card);
+      return next;
+    });
+  };
+
+  const handleSave = () => {
+    if (selection.size !== state.required) {
+      toast({
+        title: `Select ${state.required} card${state.required > 1 ? 's' : ''}.`,
+        status: 'warning',
+        duration: 2000,
+        isClosable: true,
+      });
+      return;
+    }
+    onSave(state.street, Array.from(selection));
+  };
+
+  const streetLabel = state.street === 'flop' ? 'Flop' : state.street === 'turn' ? 'Turn' : 'River';
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} size="lg">
+      <ModalOverlay />
+      <ModalContent>
+        <ModalHeader>Select {streetLabel} Cards</ModalHeader>
+        <ModalCloseButton />
+        <ModalBody>
+          <Stack spacing={5} align="center">
+            <Text fontSize="sm" color="whiteAlpha.700" textAlign="center">
+              Choose {state.required} card{state.required > 1 ? 's' : ''} for the {streetLabel.toLowerCase()}.
+            </Text>
+            <Text fontSize="sm" color="whiteAlpha.600">
+              Selected {selection.size} / {state.required}
+            </Text>
+            <Stack spacing={2} align="center" w="full">
+              {BOARD_CARD_SUITS.map((suit) => {
+                const palette = SUIT_COLORS[suit] ?? SUIT_COLORS.s;
+                return (
+                  <SimpleGrid
+                    key={suit}
+                    columns={13}
+                    spacing={1}
+                    justifyItems="center"
+                    w="full"
+                    maxW="520px"
+                    mx="auto"
+                  >
+                    {BOARD_CARD_RANKS.map((rank) => {
+                      const card = `${rank}${suit}`;
+                      const isSelected = selection.has(card);
+                      const disabled = state.disabled.has(card) && !isSelected;
+                      return (
+                        <Button
+                          key={card}
+                          size="xs"
+                          w="32px"
+                          h="28px"
+                          borderRadius="sm"
+                          bg={isSelected ? palette.selectedBg : palette.buttonBg}
+                          borderColor={isSelected ? palette.buttonBorder : 'whiteAlpha.300'}
+                          borderWidth="1px"
+                          opacity={disabled ? 0.25 : 1}
+                          onClick={() => handleToggle(card)}
+                          isDisabled={disabled}
+                          _hover={
+                            disabled
+                              ? { cursor: 'not-allowed' }
+                              : { bg: palette.selectedBg }
+                          }
+                          _active={{ bg: palette.selectedBg }}
+                          px={0}
+                        >
+                          <Text
+                            fontFamily="mono"
+                            fontSize="xs"
+                            fontWeight="semibold"
+                            color={isSelected ? palette.selectedText : palette.defaultText}
+                          >
+                            {rank}
+                            {SUIT_SYMBOLS[suit]}
+                          </Text>
+                        </Button>
+                      );
+                    })}
+                  </SimpleGrid>
+                );
+              })}
+            </Stack>
           </Stack>
         </ModalBody>
         <ModalFooter>
