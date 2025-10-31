@@ -86,9 +86,9 @@ const FilterCategory = ({ category, disabledFilters, toggleFilter, colorScheme }
                 onClick={() => toggleFilter(filter.id)}
               >
                 <Stack spacing={0} align="flex-start">
-                  <Text>{filter.label}</Text>
+                  <Text fontSize="xs">{filter.label}</Text>
                   {filter.detail && (
-                    <Text fontSize="xs" opacity={disabled ? 0.6 : 0.8}>
+                    <Text fontSize="0.65rem" opacity={disabled ? 0.6 : 0.8}>
                       {filter.detail}
                     </Text>
                   )}

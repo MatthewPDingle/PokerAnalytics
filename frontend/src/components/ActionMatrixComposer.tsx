@@ -566,11 +566,46 @@ const deriveRelativePositionLabel = (
   return 'Middle';
 };
 
+const EPSILON = 1e-6;
+
 const isAggressiveAction = (action: SeatAction | undefined) => {
   if (!action) {
     return false;
   }
   return action.action === 'open' || action.action === 'bet' || action.action === 'raise';
+};
+
+const didCommitAllIn = (entry: StepFilterSummary): boolean => {
+  if (!entry.action || !entry.snapshot) {
+    return false;
+  }
+  const { stackAfter, stackBefore, resultContribution, contribution, resultAdded } = entry.snapshot;
+  if (typeof stackAfter === 'number' && stackAfter <= EPSILON) {
+    return true;
+  }
+  if (typeof stackBefore === 'number') {
+    const priorContribution = contribution ?? 0;
+    const finalContribution = resultContribution ?? priorContribution;
+    const added = resultAdded ?? Math.max(finalContribution - priorContribution, 0);
+    if (added >= Math.max(stackBefore - EPSILON, 0)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const isCallOrCoveringAction = (entry: StepFilterSummary): boolean => {
+  if (!entry.action) {
+    return false;
+  }
+  switch (entry.action.action) {
+    case 'call':
+    case 'raise':
+    case 'all_in':
+      return true;
+    default:
+      return false;
+  }
 };
 
 const computeStreetCompletion = (state: TableComposerState): Record<Street, boolean> => {
@@ -1165,6 +1200,8 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
     const filters: DerivedFilter[] = [];
     const baseId = `${street}-${highlightSeat.seatId}`;
     const targetIndex = summary.steps.findIndex((entry) => entry.step.id === targetEntry!.step.id);
+    const cutoff = street === highlight.street ? targetIndex + 1 : summary.steps.length;
+    const consideredSteps = summary.steps.slice(0, Math.max(cutoff, 0));
     const seatEntries = summary.steps
       .map((entry, idx) => ({ entry, idx }))
       .filter(({ entry }) => entry.step.seatId === highlightSeat.seatId && entry.action);
@@ -1180,47 +1217,58 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
       label: `Seat Position: ${highlightSeat.position}`,
     });
     const relative = deriveRelativePositionLabel(street, targetEntry, highlightSeat, seatMap);
-      if (relative) {
-        filters.push({
-          id: `${baseId}-relative`,
-          label: `Relative Position: ${relative}`,
-        });
-      }
+    if (relative) {
+      filters.push({
+        id: `${baseId}-relative`,
+        label: `Relative Position: ${relative}`,
+      });
+    }
     const playersRemaining = targetEntry.aliveAfter.length;
     filters.push({
       id: `${baseId}-players`,
       label: `Players Remaining: ${playersRemaining}`,
     });
-    filters.push({
-      id: `${baseId}-action-line`,
-      label: `Action: ${actionLine}`,
-    });
-
-    if (
-      street === 'preflop' &&
-      targetEntry.action?.action === 'raise' &&
-      summary.steps.slice(0, targetIndex).some((entry) => entry.action && isAggressiveAction(entry.action) && entry.step.seatId !== highlightSeat.seatId)
-    ) {
+    if (actionLine !== '—') {
       filters.push({
-        id: `${baseId}-three-bet`,
-        label: '3-Bet Preflop',
+        id: `${baseId}-action-line`,
+        label: `Action: ${actionLine}`,
       });
     }
 
-    if (targetEntry.action && (targetEntry.action.action === 'call' || targetEntry.action.action === 'limp')) {
-      const snapshot = targetEntry.snapshot;
-      if (snapshot) {
-        const toCall = Math.max(snapshot.toCall ?? 0, snapshot.resultAdded ?? 0);
-        const totalPot = (snapshot.potBefore ?? 0) + toCall;
-        if (toCall > 1e-6 && totalPot > 1e-6) {
-          const potOdds = toCall / totalPot;
-          const bucketLabel = mapPotOddsBucket(potOdds) ?? (potOdds !== null ? formatPercent(potOdds) : 'n/a');
-          filters.push({
-            id: `${baseId}-pot-odds`,
-            label: `Pot Odds: ${bucketLabel}`,
-            detail: `${formatBB(toCall)} / ${formatBB(totalPot)} = ${potOdds !== null ? formatPercent(potOdds) : 'n/a'}`,
-          });
-        }
+    if (street === 'preflop') {
+      const aggressiveCount = consideredSteps.filter((entry) => {
+        const actionType = entry.action?.action;
+        return actionType === 'open' || actionType === 'raise' || actionType === 'all_in';
+      }).length;
+      let potLabel: string | null = null;
+      if (aggressiveCount >= 4) {
+        potLabel = '5+ Bet Pot';
+      } else if (aggressiveCount >= 3) {
+        potLabel = '4-Bet Pot';
+      } else if (aggressiveCount >= 2) {
+        potLabel = '3-Bet Pot';
+      }
+      if (potLabel) {
+        filters.push({
+          id: `preflop-pot-${potLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+          label: potLabel,
+        });
+      }
+    }
+
+    const snapshot = targetEntry.snapshot;
+
+    if (targetEntry.action && (targetEntry.action.action === 'call' || targetEntry.action.action === 'limp') && snapshot) {
+      const toCall = Math.max(snapshot.toCall ?? 0, snapshot.resultAdded ?? 0);
+      const totalPot = (snapshot.potBefore ?? 0) + toCall;
+      if (toCall > 1e-6 && totalPot > 1e-6) {
+        const potOdds = toCall / totalPot;
+        const bucketLabel = mapPotOddsBucket(potOdds) ?? (potOdds !== null ? formatPercent(potOdds) : 'n/a');
+        filters.push({
+          id: `${baseId}-pot-odds`,
+          label: `Pot Odds: ${bucketLabel}`,
+          detail: `${formatBB(toCall)} / ${formatBB(totalPot)} = ${potOdds !== null ? formatPercent(potOdds) : 'n/a'}`,
+        });
       }
     }
 
@@ -1232,6 +1280,62 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
         label: betBucket.detail
           ? `${betBucket.label}: ${bucketText} (${betBucket.detail})`
           : `${betBucket.label}: ${bucketText}`,
+      });
+    }
+
+    if (!betBucket && snapshot) {
+      const facing = Math.max(snapshot.toCall ?? 0, snapshot.resultAdded ?? 0);
+      if (facing > 1e-6) {
+        const potBefore = snapshot.potBefore ?? 0;
+        const bucket = mapBetBucket(facing, potBefore, snapshot.stackAfter);
+        if (bucket) {
+          const bucketText = bucket.replace(' Pot', '');
+          const ratio = potBefore > 1e-6 ? facing / potBefore : null;
+          filters.push({
+            id: `${baseId}-facing-bucket`,
+            label: `Facing Bet Bucket: ${bucketText}`,
+            detail:
+              ratio !== null
+                ? `${formatBB(facing)} / ${formatBB(potBefore)} = ${formatPercent(ratio)}`
+                : `${formatBB(facing)} ${BIG_BLIND_SYMBOL}`,
+          });
+        }
+      }
+    }
+
+    const firstAllInIndex = consideredSteps.findIndex((entry) => didCommitAllIn(entry));
+    let allInCalled = false;
+    if (firstAllInIndex >= 0) {
+      for (let j = firstAllInIndex + 1; j < consideredSteps.length; j += 1) {
+        const followUp = consideredSteps[j];
+        if (!followUp.action) {
+          continue;
+        }
+        if (followUp.step.seatId === consideredSteps[firstAllInIndex].step.seatId) {
+          continue;
+        }
+        if (isCallOrCoveringAction(followUp)) {
+          allInCalled = true;
+          break;
+        }
+        if (followUp.action.action !== 'fold') {
+          allInCalled = true;
+          break;
+        }
+      }
+    }
+
+    const allInOccurred = firstAllInIndex >= 0;
+    if (allInOccurred) {
+      filters.push({
+        id: `${street}-all-in`,
+        label: 'All-In',
+      });
+    }
+    if (allInCalled) {
+      filters.push({
+        id: `${street}-all-in-called`,
+        label: 'All-In Called',
       });
     }
     return filters;
@@ -1335,14 +1439,27 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
       if (!isVisible) {
         return { key: street, title: BOARD_TITLES[street], filters: [] as DerivedFilter[] };
       }
-      const cards = state.board[street] ?? [];
-      if (cards.length === 0) {
+      const cards =
+        street === 'flop'
+          ? state.board.flop ?? []
+          : street === 'turn'
+            ? [...(state.board.flop ?? []), ...(state.board.turn ?? [])]
+            : [
+                ...(state.board.flop ?? []),
+                ...(state.board.turn ?? []),
+                ...(state.board.river ?? []),
+              ];
+      if (cards.length < 3) {
         return { key: street, title: BOARD_TITLES[street], filters: [] as DerivedFilter[] };
       }
       const textures = street === 'flop' ? deriveFlopTextures(cards) : deriveBoardTextures(cards);
-      const allowedTextures = street === 'flop'
-        ? textures.filter((texture) => texture in FLOP_TEXTURE_DEFINITIONS)
-        : textures.filter((texture) => texture in TURN_RIVER_TEXTURE_DEFINITIONS);
+      const allowedTextures =
+        street === 'flop'
+          ? textures.filter((texture) => texture in FLOP_TEXTURE_DEFINITIONS)
+          : textures.filter(
+              (texture) =>
+                texture in TURN_RIVER_TEXTURE_DEFINITIONS || texture in FLOP_TEXTURE_DEFINITIONS,
+            );
       const filters: DerivedFilter[] = allowedTextures.map((texture, index) => ({
         id: `${street}-texture-${texture.toLowerCase().replace(/\s+/g, '-')}-${index}`,
         label: texture,
@@ -1371,6 +1488,15 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
     state.stepActions,
     state.streetSequences,
   ]);
+
+  const highlightSeatId = useMemo(() => {
+    if (!highlight) {
+      return null;
+    }
+    const sequence = state.streetSequences[highlight.street] ?? [];
+    const selectedStep = sequence.find((entry) => entry.id === highlight.stepId);
+    return selectedStep?.seatId ?? null;
+  }, [highlight, state.streetSequences]);
 
   useEffect(() => {
     if (!highlightFilters) {
@@ -1550,6 +1676,24 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
                           const totalContribution = snapshot?.resultContribution ?? contributionBefore;
                           const addedAmount = snapshot?.resultAdded ?? Math.max(totalContribution - contributionBefore, 0);
                           const isHighlighted = highlight?.street === street && highlight.stepId === step.id;
+                          const isSeatHighlighted = highlightSeatId === seat.seatId;
+                          const highlightOutlineColor = 'rgba(128, 90, 213, 0.6)';
+                          const seatOutlineProps = isSeatHighlighted
+                            ? {
+                                outline: `2px solid ${highlightOutlineColor}`,
+                                outlineOffset: '-2px',
+                                position: 'relative' as const,
+                                zIndex: isHighlighted ? 2 : 1,
+                              }
+                            : {};
+                          const selectedProps = isHighlighted
+                            ? {
+                                bg: 'purple.900',
+                                boxShadow: `inset 0 0 0 1px ${highlightOutlineColor}`,
+                                position: 'relative' as const,
+                                zIndex: 2,
+                              }
+                            : {};
                           const canEditStep = canEditStreet;
                           let badgeOverride: string | undefined;
                           if (action) {
@@ -1579,9 +1723,9 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
                                 height={ROW_HEIGHT}
                                 py={2}
                                 cursor="pointer"
-                                bg={isHighlighted ? 'purple.900' : undefined}
-                                boxShadow={isHighlighted ? 'inset 0 0 0 1px rgba(128, 90, 213, 0.6)' : undefined}
                                 onClick={handleCellClick}
+                                {...seatOutlineProps}
+                                {...selectedProps}
                               >
                                 <Stack spacing={1} align="center" justify="center" h="full">
                                   <Flex justify="center" align="baseline" gap={2}>
