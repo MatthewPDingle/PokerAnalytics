@@ -40,6 +40,13 @@ const applySeatAction = (
 };
 
 describe('tableComposer sequencing', () => {
+  it('assigns default stacks of 100 BB to each seat', () => {
+    const state = createInitialTableComposerState();
+    state.seats.forEach((seat) => {
+      expect(seat.startingStack).toBe(100);
+    });
+  });
+
   it('retains preflop placeholders after first action', () => {
     let state = createInitialTableComposerState();
     const initialSeatIds = state.streetSequences.preflop.map((step) => step.seatId);

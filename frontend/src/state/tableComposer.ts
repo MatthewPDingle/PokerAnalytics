@@ -50,6 +50,7 @@ export type SeatState = {
   position: SeatPosition;
   isActive: boolean;
   actions: Partial<Record<Street, SeatAction>>;
+  startingStack: number;
 };
 
 export type StreetActionStep = {
@@ -115,6 +116,7 @@ const DEFAULT_PRESET: TableComposerPreset = {
     position,
     isActive: true,
     actions: {},
+    startingStack: 100,
   })),
   buttonSeatId: 'seat-BTN',
 };

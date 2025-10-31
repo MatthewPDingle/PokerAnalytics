@@ -12,14 +12,12 @@ import {
   ModalFooter,
   ModalHeader,
   ModalOverlay,
-  NumberDecrementStepper,
-  NumberIncrementStepper,
-  NumberInput,
-  NumberInputField,
-  NumberInputStepper,
   Radio,
   RadioGroup,
-  Select,
+  Slider,
+  SliderFilledTrack,
+  SliderThumb,
+  SliderTrack,
   Stack,
   Table,
   Tbody,
@@ -33,7 +31,7 @@ import {
   useToast,
 } from '@chakra-ui/react';
 import { RepeatIcon, SettingsIcon } from '@chakra-ui/icons';
-import { Dispatch, useEffect, useMemo, useState } from 'react';
+import { Dispatch, useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   PRE_FLOP_SEQUENCE_ORDER,
@@ -76,6 +74,10 @@ type EditorState = {
   contribution: number;
   currentAction: SeatAction | undefined;
   minRaiseTo: number;
+  stackBefore: number;
+  maxContribution: number;
+  currentBet: number;
+  startingStack: number;
 };
 
 type ActionSnapshot = {
@@ -83,6 +85,13 @@ type ActionSnapshot = {
   toCall: number;
   contribution: number;
   minRaiseTo: number;
+  stackBefore: number;
+  stackAfter: number;
+  maxContribution: number;
+  currentBet: number;
+  startingStack: number;
+  resultContribution: number;
+  resultAdded: number;
 };
 
 type PotTimeline = {
@@ -92,8 +101,7 @@ type PotTimeline = {
   blindsTotal: number;
 };
 
-const PRE_FLOP_RAISE_MULTIPLES: number[] = [2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10];
-const DEFAULT_PRE_FLOP_MULTIPLE = 3;
+const DEFAULT_STACK_SIZE = 100;
 
 const BUCKET_REPRESENTATIVE_RATIO: Record<string, number> = {
   pct_0_25: 0.125,
@@ -112,9 +120,6 @@ const BUCKET_REPRESENTATIVE_RATIO: Record<string, number> = {
 
 const BIG_BLIND_SYMBOL = 'BB';
 const ROW_HEIGHT = '56px';
-const OPTION_LABEL_WIDTH = 8;
-
-const formatMultipleValue = (value: number): string => (Math.abs(value - Math.round(value)) < 1e-6 ? value.toFixed(0) : value.toFixed(1));
 
 const formatPotPercentage = (ratio: number | null): string => {
   if (ratio === null || !Number.isFinite(ratio)) {
@@ -233,17 +238,37 @@ const buildPotTimeline = (state: TableComposerState): PotTimeline => {
     turn: new Map(),
     river: new Map(),
   };
+  const seatStartingStacks = new Map<string, number>();
+  const totalContributions = new Map<string, number>();
+
+  state.seats.forEach((seat) => {
+    if (!seat.isActive) {
+      return;
+    }
+    seatStartingStacks.set(seat.seatId, seat.startingStack ?? DEFAULT_STACK_SIZE);
+    totalContributions.set(seat.seatId, 0);
+  });
 
   const smallBlindSeat = state.seats.find((seat) => seat.isActive && seat.position === 'SB');
   if (smallBlindSeat) {
-    contributions.preflop.set(smallBlindSeat.seatId, 0.5);
-    pot += 0.5;
+    const sbAmount = 0.5;
+    contributions.preflop.set(smallBlindSeat.seatId, sbAmount);
+    pot += sbAmount;
+    totalContributions.set(
+      smallBlindSeat.seatId,
+      (totalContributions.get(smallBlindSeat.seatId) ?? 0) + sbAmount,
+    );
   }
 
   const bigBlindSeat = state.seats.find((seat) => seat.isActive && seat.position === 'BB');
   if (bigBlindSeat) {
-    contributions.preflop.set(bigBlindSeat.seatId, (contributions.preflop.get(bigBlindSeat.seatId) ?? 0) + 1);
-    pot += 1;
+    const bbAmount = 1;
+    contributions.preflop.set(bigBlindSeat.seatId, (contributions.preflop.get(bigBlindSeat.seatId) ?? 0) + bbAmount);
+    pot += bbAmount;
+    totalContributions.set(
+      bigBlindSeat.seatId,
+      (totalContributions.get(bigBlindSeat.seatId) ?? 0) + bbAmount,
+    );
   }
 
   blindsTotal = pot;
@@ -255,29 +280,52 @@ const buildPotTimeline = (state: TableComposerState): PotTimeline => {
     }
     const sequence = state.streetSequences[street] ?? [];
     let currentBet = street === 'preflop' ? 1 : 0;
-    let lastRaiseAmount = 1;
+    let lastRaiseAmount = street === 'preflop' ? 1 : 0;
     const streetContributions = contributions[street];
     sequence.forEach((step) => {
       const contribution = streetContributions.get(step.seatId) ?? 0;
       const toCall = Math.max(currentBet - contribution, 0);
+      const startingStack = seatStartingStacks.get(step.seatId) ?? DEFAULT_STACK_SIZE;
+      const totalBefore = totalContributions.get(step.seatId) ?? 0;
+      const stackBefore = Math.max(startingStack - totalBefore, 0);
+      const maxContribution = contribution + stackBefore;
       actionContext.set(step.id, {
         potBefore: pot,
         toCall,
         contribution,
         minRaiseTo: currentBet + Math.max(lastRaiseAmount, 1),
+        stackBefore,
+        stackAfter: stackBefore,
+        maxContribution,
+        currentBet,
+        startingStack,
+        resultContribution: contribution,
+        resultAdded: 0,
       });
 
       const action = state.stepActions[step.id];
       if (!action) {
         return;
       }
+      const stackLimit = stackBefore;
       const previousBet = currentBet;
       const result = resolveActionContribution(action, street, pot, contribution, currentBet);
-      pot += result.added;
-      streetContributions.set(step.seatId, result.newContribution);
-      currentBet = Math.max(currentBet, result.newBet);
-      if (result.newBet > previousBet) {
-        lastRaiseAmount = Math.max(result.newBet - previousBet, 1);
+      const appliedAddition = Math.min(result.added, stackLimit);
+      const nextContribution = contribution + appliedAddition;
+      pot += appliedAddition;
+      streetContributions.set(step.seatId, nextContribution);
+      const totalAfter = totalBefore + appliedAddition;
+      totalContributions.set(step.seatId, totalAfter);
+      const actualNewBet = Math.max(currentBet, nextContribution);
+      if (actualNewBet > previousBet) {
+        lastRaiseAmount = Math.max(actualNewBet - previousBet, 1);
+      }
+      currentBet = actualNewBet;
+      const snapshot = actionContext.get(step.id);
+      if (snapshot) {
+        snapshot.stackAfter = Math.max(startingStack - totalAfter, 0);
+        snapshot.resultContribution = nextContribution;
+        snapshot.resultAdded = appliedAddition;
       }
     });
   });
@@ -288,13 +336,6 @@ const buildPotTimeline = (state: TableComposerState): PotTimeline => {
     streetStartPot,
     blindsTotal,
   };
-};
-
-const padLabel = (value: string, length: number) => {
-  if (value.length >= length) {
-    return value;
-  }
-  return value + '\u00A0'.repeat(length - value.length);
 };
 
 const deriveActionOptions = (
@@ -350,7 +391,7 @@ const deriveActionOptions = (
   };
 };
 
-const renderActionBadge = (action?: SeatAction) => {
+const renderActionBadge = (action?: SeatAction, overrideLabel?: string) => {
   if (!action) {
     return null;
   }
@@ -364,11 +405,11 @@ const renderActionBadge = (action?: SeatAction) => {
     case 'fold':
       return <Badge colorScheme="red">FOLD</Badge>;
     case 'open':
-      return <Badge colorScheme="green">{formatSizing(action, 'OPEN')}</Badge>;
+      return <Badge colorScheme="green">{overrideLabel ?? formatSizing(action, 'OPEN')}</Badge>;
     case 'bet':
-      return <Badge colorScheme="green">{formatSizing(action, 'BET')}</Badge>;
+      return <Badge colorScheme="green">{overrideLabel ?? formatSizing(action, 'BET')}</Badge>;
     case 'raise':
-      return <Badge colorScheme="purple">{formatSizing(action, 'RAISE')}</Badge>;
+      return <Badge colorScheme="purple">{overrideLabel ?? formatSizing(action, 'RAISE')}</Badge>;
     default:
       return <Badge>{action.action.toUpperCase()}</Badge>;
   }
@@ -521,6 +562,12 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
       contribution: snapshot?.contribution ?? 0,
       currentAction: state.stepActions[step.id],
       minRaiseTo: snapshot?.minRaiseTo ?? 0,
+      stackBefore: snapshot?.stackBefore ?? seat.startingStack ?? DEFAULT_STACK_SIZE,
+      maxContribution:
+        snapshot?.maxContribution ??
+        (snapshot?.contribution ?? 0) + (snapshot?.stackBefore ?? seat.startingStack ?? DEFAULT_STACK_SIZE),
+      currentBet: snapshot?.currentBet ?? 0,
+      startingStack: snapshot?.startingStack ?? seat.startingStack ?? DEFAULT_STACK_SIZE,
     });
     onOpen();
   };
@@ -570,25 +617,35 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
               </Tr>
             </Thead>
             <Tbody>
-              {positionSeats.map((seat) => (
-                <Tr key={seat.seatId}>
-                  <Td textAlign="center" height={ROW_HEIGHT} py={2}>
-                    <Stack spacing={1} align="center" justify="center" h="full">
-                      <Text fontWeight="semibold">{seat.position}</Text>
-                      {seat.position === 'SB' && (
-                        <Text fontSize="xs" color="whiteAlpha.500">
-                          Posts 0.5 {BIG_BLIND_SYMBOL}
-                        </Text>
-                      )}
-                      {seat.position === 'BB' && (
-                        <Text fontSize="xs" color="whiteAlpha.500">
-                          Posts 1 {BIG_BLIND_SYMBOL}
-                        </Text>
-                      )}
-                    </Stack>
-                  </Td>
-                </Tr>
-              ))}
+              {positionSeats.map((seat) => {
+                const rawStack = seat.startingStack ?? DEFAULT_STACK_SIZE;
+                const adjustedStack =
+                  seat.position === 'SB' ? rawStack - 0.5 : seat.position === 'BB' ? rawStack - 1 : rawStack;
+                return (
+                  <Tr key={seat.seatId}>
+                    <Td textAlign="center" height={ROW_HEIGHT} py={2}>
+                      <Stack spacing={1} align="center" justify="center" h="full">
+                        <Flex justify="center" align="baseline" gap={2}>
+                          <Text fontWeight="semibold">{seat.position}</Text>
+                          <Text fontSize="0.65rem" color="whiteAlpha.600">
+                            ({formatBB(Math.max(adjustedStack, 0))} {BIG_BLIND_SYMBOL})
+                          </Text>
+                      </Flex>
+                        {seat.position === 'SB' && (
+                          <Text fontSize="xs" color="whiteAlpha.500">
+                            Posts 0.5 {BIG_BLIND_SYMBOL}
+                          </Text>
+                        )}
+                        {seat.position === 'BB' && (
+                          <Text fontSize="xs" color="whiteAlpha.500">
+                            Posts 1 {BIG_BLIND_SYMBOL}
+                          </Text>
+                        )}
+                      </Stack>
+                    </Td>
+                  </Tr>
+                );
+              })}
             </Tbody>
           </Table>
         </Box>
@@ -634,17 +691,47 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
                       const label = occurrence > 1 ? `${seat.position} (${occurrence})` : seat.position;
                       const foldStreet = findFoldStreetBefore(seat, street);
                       const canEditStep = canEditStreet;
+                      const snapshot = actionContext.get(step.id);
+                      const stackAfter = snapshot?.stackAfter;
+                      const contributionBefore = snapshot?.contribution ?? 0;
+                      const totalContribution = snapshot?.resultContribution ?? contributionBefore;
+                      const addedAmount = snapshot?.resultAdded ?? Math.max(totalContribution - contributionBefore, 0);
+                      let badgeOverride: string | undefined;
+                      if (action) {
+                        if (action.action === 'bet') {
+                          if (addedAmount > 0) {
+                            badgeOverride = `BET (${formatBB(addedAmount)} ${BIG_BLIND_SYMBOL})`;
+                          }
+                        } else if (action.action === 'open') {
+                          if (totalContribution > 0) {
+                            badgeOverride = `OPEN (${formatBB(totalContribution)} ${BIG_BLIND_SYMBOL})`;
+                          }
+                        } else if (action.action === 'raise') {
+                          if (totalContribution > 0) {
+                            badgeOverride = `RAISE (to ${formatBB(totalContribution)} ${BIG_BLIND_SYMBOL})`;
+                          } else if (addedAmount > 0) {
+                            badgeOverride = `RAISE (${formatBB(addedAmount)} ${BIG_BLIND_SYMBOL})`;
+                          }
+                        }
+                      }
                       return (
                         <Tr key={step.id}>
                           <Td textAlign="center" height={ROW_HEIGHT} py={2}>
                             <Stack spacing={1} align="center" justify="center" h="full">
-                              <Text fontWeight="semibold">{label}</Text>
+                              <Flex justify="center" align="baseline" gap={2}>
+                                <Text fontWeight="semibold">{label}</Text>
+                                {action && typeof stackAfter === 'number' && !foldStreet && (
+                                  <Text fontSize="0.65rem" color="whiteAlpha.600">
+                                    ({formatBB(stackAfter)} {BIG_BLIND_SYMBOL} Behind)
+                                  </Text>
+                                )}
+                              </Flex>
                               {foldStreet ? (
                                 <Text fontSize="xs" color="whiteAlpha.500">
                                   Folded {foldStreet.toUpperCase()}
                                 </Text>
                               ) : (
-                                renderActionBadge(action)
+                                renderActionBadge(action, badgeOverride)
                               )}
                               {canEditStep && !foldStreet && (
                                 <Button size="xs" variant="link" onClick={() => openEditor(step, street)}>
@@ -754,25 +841,28 @@ type SeatActionModalProps = {
 const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: SeatActionModalProps) => {
   const toast = useToast();
   const [choice, setChoice] = useState<ActionChoice | ''>('');
-  const [selectedMultiple, setSelectedMultiple] = useState<string>(() => String(DEFAULT_PRE_FLOP_MULTIPLE));
-  const [customMultiple, setCustomMultiple] = useState<string>(() => String(DEFAULT_PRE_FLOP_MULTIPLE));
-  const [selectedRatio, setSelectedRatio] = useState<string>('0.50');
-  const [customRatio, setCustomRatio] = useState<string>('0.50');
+  const [betAmount, setBetAmount] = useState<number>(0);
+
   const minRaiseTo = state?.minRaiseTo ?? 0;
   const isPreflopStreet = state?.street === 'preflop';
+  const stackBefore = state?.stackBefore ?? 0;
+  const startingStack = state?.startingStack ?? DEFAULT_STACK_SIZE;
+  const potBefore = state?.potBefore ?? 0;
+  const contribution = state?.contribution ?? 0;
+  const toCall = state?.toCall ?? 0;
+  const options = state?.options ?? [];
+  const editingStreet = state?.street ?? 'preflop';
+  const treatRaiseAsOpenFlag = state?.treatRaiseAsOpen ?? false;
+  const currentBetValue = state?.currentBet ?? 0;
+  const rawMaxContribution = state?.maxContribution ?? Number.POSITIVE_INFINITY;
+  const maxContribution =
+    Number.isFinite(rawMaxContribution) && rawMaxContribution >= 0
+      ? Math.min(contribution + stackBefore, rawMaxContribution)
+      : contribution + stackBefore;
+  const minRaiseTarget = Math.max(minRaiseTo, contribution + toCall);
 
-  const availableRaiseMultiples = useMemo(() => {
-    if (!isPreflopStreet) {
-      return PRE_FLOP_RAISE_MULTIPLES;
-    }
-    const required = Math.max(minRaiseTo, 0);
-    const baseline = PRE_FLOP_RAISE_MULTIPLES.filter((value) => value + 1e-6 >= Math.max(required, 2));
-    if (required > 0 && !baseline.some((value) => Math.abs(value - required) < 1e-6)) {
-      baseline.push(required);
-    }
-    const unique = Array.from(new Set(baseline.map((value) => Number(value.toFixed(2)))));
-    return unique.sort((a, b) => a - b);
-  }, [isPreflopStreet, minRaiseTo]);
+  const sliderMax = maxContribution;
+  const sliderMin = Math.min(sliderMax, Math.max(minRaiseTarget, contribution + toCall));
 
   const ratioCandidates = useMemo(() => {
     const seen = new Set<number>();
@@ -797,48 +887,27 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
     return values;
   }, [bucketOptions]);
 
+  const clampAmount = useCallback(
+    (value: number) => {
+      if (!Number.isFinite(value)) {
+        return Number(sliderMin.toFixed(2));
+      }
+      return Number(Math.min(Math.max(value, sliderMin), sliderMax).toFixed(2));
+    },
+    [sliderMin, sliderMax],
+  );
+
   useEffect(() => {
     if (!state) {
       setChoice('');
-      setSelectedMultiple(() => String(DEFAULT_PRE_FLOP_MULTIPLE));
-      setCustomMultiple(() => String(DEFAULT_PRE_FLOP_MULTIPLE));
-      setSelectedRatio('0.50');
-      setCustomRatio('0.50');
+      setBetAmount(0);
       return;
     }
 
-    const { street, currentAction } = state;
-    const action = currentAction;
+    const action = state.currentAction;
 
     if (!action) {
       setChoice('');
-      if (isPreflopStreet) {
-        const defaultMultiple = availableRaiseMultiples[0] ?? DEFAULT_PRE_FLOP_MULTIPLE;
-        const adjusted = Math.max(defaultMultiple, minRaiseTo || DEFAULT_PRE_FLOP_MULTIPLE);
-        setSelectedMultiple(String(adjusted));
-        setCustomMultiple(String(adjusted));
-      } else {
-        const potBefore = state.potBefore ?? 0;
-        const minRaiseTarget = Math.max(minRaiseTo, (state.contribution ?? 0) + (state.toCall ?? 0));
-        const effectiveRatios = ratioCandidates;
-        if (potBefore > 0) {
-          const neededRatio = minRaiseTarget > 0 ? minRaiseTarget / potBefore : 0;
-          const filtered = effectiveRatios.filter((ratio) => ratio * potBefore + 1e-6 >= minRaiseTarget);
-          if (filtered.length) {
-            const fallback = filtered[0];
-            setSelectedRatio(fallback.toFixed(2));
-            setCustomRatio(fallback.toFixed(2));
-          } else {
-            const fallback = neededRatio > 0 ? neededRatio : effectiveRatios[0] ?? 0.5;
-            setSelectedRatio('other');
-            setCustomRatio(fallback.toFixed(2));
-          }
-        } else {
-          const fallback = effectiveRatios[0] ?? 0.5;
-          setSelectedRatio(fallback.toFixed(2));
-          setCustomRatio(fallback.toFixed(2));
-        }
-      }
       return;
     }
 
@@ -855,8 +924,10 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
       case 'fold':
         setChoice('fold');
         break;
-      case 'open':
       case 'bet':
+        setChoice('bet');
+        break;
+      case 'open':
       case 'raise':
         setChoice('raise');
         break;
@@ -864,81 +935,7 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
         setChoice('');
         break;
     }
-
-    if (isPreflopStreet && action.sizing?.kind === 'bb_multiple' && typeof action.sizing.value === 'number') {
-      const value = action.sizing.value;
-      const matched = availableRaiseMultiples.find((entry) => Math.abs(entry - value) < 1e-6);
-      if (matched !== undefined) {
-        setSelectedMultiple(String(matched));
-        setCustomMultiple(String(matched));
-      } else {
-        setSelectedMultiple('other');
-        setCustomMultiple(String(value));
-      }
-    } else {
-      setSelectedMultiple(() => String(DEFAULT_PRE_FLOP_MULTIPLE));
-      setCustomMultiple(() => String(DEFAULT_PRE_FLOP_MULTIPLE));
-    }
-
-    if (!isPreflopStreet) {
-      const potBefore = state.potBefore ?? 0;
-      const minRaiseTarget = Math.max(minRaiseTo, (state.contribution ?? 0) + (state.toCall ?? 0));
-      const effectiveRatios = ratioCandidates;
-      let ratioValue: number | null = null;
-      if (action.sizing?.kind === 'pot_ratio' && typeof action.sizing.value === 'number') {
-        ratioValue = action.sizing.value;
-      } else if (action.sizing?.kind === 'bucket' && action.sizing.key) {
-        const mapped = BUCKET_REPRESENTATIVE_RATIO[action.sizing.key];
-        if (mapped !== undefined) {
-          ratioValue = mapped;
-        }
-      }
-
-      if (ratioValue !== null) {
-        const matched = effectiveRatios.find((ratio) => Math.abs(ratio - ratioValue!) < 1e-6);
-        if (matched !== undefined) {
-          const normalized = matched.toFixed(2);
-          setSelectedRatio(normalized);
-          setCustomRatio(normalized);
-        } else {
-          setSelectedRatio('other');
-          setCustomRatio(ratioValue.toFixed(2));
-        }
-      } else if (potBefore > 0) {
-        const filtered = effectiveRatios.filter((ratio) => ratio * potBefore + 1e-6 >= minRaiseTarget);
-        if (filtered.length) {
-          const fallback = filtered[0];
-          setSelectedRatio(fallback.toFixed(2));
-          setCustomRatio(fallback.toFixed(2));
-        } else {
-          const fallback = minRaiseTarget > 0 ? minRaiseTarget / potBefore : effectiveRatios[0] ?? 0.5;
-          setSelectedRatio('other');
-          setCustomRatio(fallback.toFixed(2));
-        }
-      } else {
-        const fallback = effectiveRatios[0] ?? 0.5;
-        setSelectedRatio(fallback.toFixed(2));
-        setCustomRatio(fallback.toFixed(2));
-      }
-    }
-  }, [state, availableRaiseMultiples, ratioCandidates, minRaiseTo, isPreflopStreet]);
-
-  const options = state?.options ?? [];
-  const potBefore = state?.potBefore ?? 0;
-  const toCall = state?.toCall ?? 0;
-  const contribution = state?.contribution ?? 0;
-  const minRaiseTarget = Math.max(minRaiseTo, contribution + toCall);
-  const requiresSizing = choice === 'bet' || choice === 'raise';
-  const showPreflopSizing = Boolean(isPreflopStreet && requiresSizing);
-  const showPostflopSizing = Boolean(!isPreflopStreet && requiresSizing);
-
-  const availableRatios = useMemo(() => {
-    if (isPreflopStreet || potBefore <= 0) {
-      return ratioCandidates;
-    }
-    const filtered = ratioCandidates.filter((ratio) => ratio * potBefore + 1e-6 >= minRaiseTarget);
-    return filtered.length ? filtered : ratioCandidates;
-  }, [isPreflopStreet, ratioCandidates, potBefore, minRaiseTarget]);
+  }, [state]);
 
   useEffect(() => {
     if (!options.find((option) => option.value === choice)) {
@@ -946,37 +943,42 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
     }
   }, [options, choice]);
 
-  const computeRatioForMultiple = (multiple: number): number | null => {
-    if (potBefore <= 0) {
-      return null;
+  useEffect(() => {
+    if (!state || (choice !== 'bet' && choice !== 'raise')) {
+      return;
     }
-    return Math.max(multiple - contribution, 0) / potBefore;
-  };
+    const action = state.currentAction;
+    let amount = sliderMin;
+    if (action && (action.action === 'bet' || action.action === 'raise' || action.action === 'open')) {
+      if (action.sizing?.kind === 'pot_ratio' && typeof action.sizing.value === 'number') {
+        amount = potBefore > 0 ? action.sizing.value * potBefore : action.sizing.value;
+      } else if (action.sizing?.kind === 'bucket' && action.sizing.key) {
+        const mapped = BUCKET_REPRESENTATIVE_RATIO[action.sizing.key];
+        if (mapped !== undefined) {
+          amount = potBefore > 0 ? mapped * potBefore : mapped;
+        }
+      } else if (action.sizing?.kind === 'bb_multiple' && typeof action.sizing.value === 'number') {
+        amount = action.sizing.value + contribution;
+      }
+    } else {
+      const fallbackRatio = ratioCandidates[0] ?? 0.5;
+      const fallbackAmount = potBefore > 0 ? fallbackRatio * potBefore : fallbackRatio;
+      amount = Math.max(sliderMin, fallbackAmount);
+    }
+    setBetAmount(clampAmount(amount));
+  }, [state?.step.id, state?.currentAction, choice, clampAmount, sliderMin, ratioCandidates, potBefore, contribution]);
 
-  const formatMultipleOptionLabel = (multiple: number) =>
-    `${padLabel(`${formatMultipleValue(multiple)}x`, OPTION_LABEL_WIDTH)} (${formatPotPercentage(computeRatioForMultiple(multiple))})`;
+  useEffect(() => {
+    if (choice !== 'bet' && choice !== 'raise') {
+      return;
+    }
+    setBetAmount((prev) => clampAmount(prev));
+  }, [clampAmount, choice]);
 
-  const formatRatioOptionLabel = (ratio: number) => {
-    const amount = potBefore > 0 ? ratio * potBefore : ratio;
-    const label = potBefore > 0 ? `${formatBB(amount)} BB` : `${ratio.toFixed(2)}x`;
-    return `${padLabel(label, OPTION_LABEL_WIDTH + 3)} (${formatPotPercentage(ratio)})`;
-  };
-
-  const customMultipleValue = parseFloat(customMultiple);
-  const customMultipleLabel =
-    selectedMultiple === 'other'
-      ? Number.isFinite(customMultipleValue)
-        ? `${padLabel(`${formatMultipleValue(customMultipleValue)}x`, OPTION_LABEL_WIDTH)} (${formatPotPercentage(computeRatioForMultiple(customMultipleValue))})`
-        : 'Enter a size'
-      : '';
-
-  const customRatioValue = parseFloat(customRatio);
-  const customRatioLabel =
-    selectedRatio === 'other'
-      ? Number.isFinite(customRatioValue)
-        ? formatRatioOptionLabel(customRatioValue)
-        : 'Enter a size'
-      : '';
+  const sliderDisabled = sliderMax - sliderMin < 1e-6;
+  const effectiveBetAmount = sliderDisabled ? sliderMin : clampAmount(betAmount);
+  const displayMax = sliderDisabled ? sliderMin : sliderMax;
+  const betRatio = potBefore > 0 ? effectiveBetAmount / potBefore : null;
 
   const handleSave = () => {
     if (!state) {
@@ -989,48 +991,70 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
       return;
     }
 
+    const stackCap = maxContribution;
     let sizing: SeatAction['sizing'] | undefined;
+    let plannedContribution: number | null = null;
 
-    if (requiresSizing) {
-      if (showPreflopSizing) {
-        const rawValue = selectedMultiple === 'other' ? parseFloat(customMultiple) : parseFloat(selectedMultiple);
-        if (!Number.isFinite(rawValue) || rawValue <= 0) {
-          toast({ title: 'Enter a valid raise size.', status: 'warning', duration: 2000, isClosable: true });
-          return;
-        }
-        const minRaiseTarget = Math.max(state.minRaiseTo ?? 0, contribution + toCall);
-        if (rawValue + 1e-6 < minRaiseTarget) {
-          toast({
-            title: 'Increase raise size.',
-            description: `Raise must reach at least ${formatBB(minRaiseTarget)} ${BIG_BLIND_SYMBOL}.`,
-            status: 'warning',
-            duration: 2500,
-            isClosable: true,
-          });
-          return;
-        }
-        sizing = { kind: 'bb_multiple', value: rawValue };
+    if (choice === 'bet' || choice === 'raise') {
+      const amountValue = effectiveBetAmount;
+      if (!Number.isFinite(amountValue) || amountValue <= 0) {
+        toast({ title: 'Enter a valid bet size.', status: 'warning', duration: 2000, isClosable: true });
+        return;
+      }
+      if (amountValue + 1e-6 < sliderMin) {
+        toast({
+          title: 'Increase bet size.',
+          description: `Bet must reach at least ${formatBB(sliderMin)} ${BIG_BLIND_SYMBOL}.`,
+          status: 'warning',
+          duration: 2500,
+          isClosable: true,
+        });
+        return;
+      }
+      if (amountValue > stackCap + 1e-6) {
+        toast({
+          title: 'Bet exceeds remaining stack.',
+          description: `${state.seat.position} has ${formatBB(stackBefore)} ${BIG_BLIND_SYMBOL} available.`,
+          status: 'warning',
+          duration: 2500,
+          isClosable: true,
+        });
+        return;
+      }
+
+      if (isPreflopStreet) {
+        const incremental = Math.max(amountValue - contribution, 0);
+        sizing = { kind: 'bb_multiple', value: incremental };
+        plannedContribution = amountValue;
       } else {
-        const ratioValue = selectedRatio === 'other' ? parseFloat(customRatio) : parseFloat(selectedRatio);
-        if (!Number.isFinite(ratioValue) || ratioValue <= 0) {
-          toast({ title: 'Enter a valid bet size.', status: 'warning', duration: 2000, isClosable: true });
-          return;
-        }
-        if (potBefore > 0 && ratioValue * potBefore + 1e-6 < minRaiseTarget) {
-          toast({
-            title: 'Increase bet size.',
-            description: `Bet must reach at least ${formatBB(minRaiseTarget)} ${BIG_BLIND_SYMBOL}.`,
-            status: 'warning',
-            duration: 2500,
-            isClosable: true,
-          });
-          return;
-        }
+        const ratioValue = potBefore > 0 && amountValue > 0 ? amountValue / potBefore : amountValue;
         sizing = { kind: 'pot_ratio', value: ratioValue };
+        plannedContribution = amountValue;
       }
     }
 
     const action = mapChoiceToAction(state.street, choice, sizing, state.treatRaiseAsOpen);
+    if (action) {
+      let finalContribution = plannedContribution;
+      if (finalContribution === null) {
+        const result = resolveActionContribution(action, editingStreet, potBefore, contribution, currentBetValue);
+        finalContribution = result.newContribution;
+      }
+      if (finalContribution !== null) {
+        const added = Math.max(finalContribution - contribution, 0);
+        if (added > stackBefore + 1e-6 || finalContribution > stackCap + 1e-6) {
+          toast({
+            title: 'Action exceeds remaining stack.',
+            description: `${state.seat.position} has ${formatBB(stackBefore)} ${BIG_BLIND_SYMBOL} available.`,
+            status: 'warning',
+            duration: 2500,
+            isClosable: true,
+          });
+          return;
+        }
+      }
+    }
+
     onSave(action);
   };
 
@@ -1043,9 +1067,14 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
         <ModalBody>
           <Stack spacing={4}>
             {state && (
-              <Text fontSize="sm" color="whiteAlpha.700">
-                Current pot: {formatBB(state.potBefore ?? 0)} {BIG_BLIND_SYMBOL}
-              </Text>
+              <Stack spacing={0.5} fontSize="sm" color="whiteAlpha.700">
+                <Text>
+                  Current pot: {formatBB(state.potBefore ?? 0)} {BIG_BLIND_SYMBOL}
+                </Text>
+                <Text>
+                  Stack remaining: {formatBB(state.stackBefore)} {BIG_BLIND_SYMBOL} (of {formatBB(state.startingStack)} {BIG_BLIND_SYMBOL})
+                </Text>
+              </Stack>
             )}
             <RadioGroup value={choice} onChange={(value) => setChoice(value as ActionChoice)}>
               <Stack direction="column" spacing={2}>
@@ -1057,99 +1086,32 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
               </Stack>
             </RadioGroup>
 
-            {showPreflopSizing && (
+            {(choice === 'bet' || choice === 'raise') && (
               <Stack spacing={2}>
-                <Text fontSize="sm" fontWeight="semibold">
-                  Raise Size
-                </Text>
-                <Select
-                  value={selectedMultiple}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setSelectedMultiple(value);
-                    if (value !== 'other') {
-                      setCustomMultiple(value);
-                    }
-                  }}
-                  fontFamily="mono"
-                >
-                  {availableRaiseMultiples.map((value) => (
-                    <option key={value} value={value}>
-                      {formatMultipleOptionLabel(value)}
-                    </option>
-                  ))}
-                  <option value="other">Other…</option>
-                </Select>
-                {selectedMultiple === 'other' && (
-                  <NumberInput
-                    value={customMultiple}
-                    onChange={(value) => setCustomMultiple(value)}
-                    min={Math.max(minRaiseTarget, 0)}
-                    precision={2}
-                    step={0.5}
-                  >
-                    <NumberInputField placeholder="Raise multiple" />
-                    <NumberInputStepper>
-                      <NumberIncrementStepper />
-                      <NumberDecrementStepper />
-                    </NumberInputStepper>
-                  </NumberInput>
-                )}
-                {customMultipleLabel && (
-                  <Text fontSize="xs" color="whiteAlpha.600">
-                    {customMultipleLabel}
+                <Flex justify="space-between" align="center">
+                  <Text fontSize="sm" fontWeight="semibold">
+                    {isPreflopStreet ? 'Raise Size' : 'Bet / Raise Size'}
                   </Text>
-                )}
-              </Stack>
-            )}
-
-            {showPostflopSizing && (
-              <Stack spacing={2}>
-                <Text fontSize="sm" fontWeight="semibold">
-                  Bet / Raise Size
-                </Text>
-                <Select
-                  value={selectedRatio}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setSelectedRatio(value);
-                    if (value !== 'other') {
-                      const numeric = Number.parseFloat(value);
-                      setCustomRatio(Number.isFinite(numeric) ? numeric.toFixed(2) : value);
-                    }
-                  }}
-                  fontFamily="mono"
-                >
-                  {availableRatios.map((ratio) => {
-                    const value = ratio.toFixed(2);
-                    return (
-                      <option key={value} value={value}>
-                        {formatRatioOptionLabel(ratio)}
-                      </option>
-                    );
-                  })}
-                  <option value="other">Other…</option>
-                </Select>
-                {selectedRatio === 'other' && (
-                  <NumberInput
-                    value={customRatio}
-                    onChange={(value) => setCustomRatio(value)}
-                    min={potBefore > 0 ? Math.max(minRaiseTarget / potBefore, 0) : 0}
-                    precision={2}
-                    step={0.05}
-                  >
-                    <NumberInputField placeholder="Pot multiple" />
-                    <NumberInputStepper>
-                      <NumberIncrementStepper />
-                      <NumberDecrementStepper />
-                    </NumberInputStepper>
-                  </NumberInput>
-                )}
-                {customRatioLabel && (
-                  <Text fontSize="xs" color="whiteAlpha.600">
-                    {customRatioLabel}
+                  <Text fontSize="sm" fontFamily="mono" color="whiteAlpha.900">
+                    {formatBB(effectiveBetAmount)} {BIG_BLIND_SYMBOL}
                   </Text>
-                )}
+                </Flex>
+                <Slider
+                  value={effectiveBetAmount}
+                  min={sliderMin}
+                  max={sliderMax}
+                  step={1}
+                  isDisabled={sliderDisabled}
+                  onChange={(value) => setBetAmount(value)}
+                >
+                  <SliderTrack>
+                    <SliderFilledTrack />
+                  </SliderTrack>
+                  <SliderThumb />
+                </Slider>
+                <Text fontSize="xs" color="whiteAlpha.600">
+                  {formatPotPercentage(betRatio)} of pot · Min {formatBB(sliderMin)} {BIG_BLIND_SYMBOL} · Max {formatBB(displayMax)} {BIG_BLIND_SYMBOL}
+                </Text>
               </Stack>
             )}
           </Stack>
