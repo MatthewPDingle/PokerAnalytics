@@ -3,6 +3,7 @@ import {
   Box,
   Button,
   ButtonGroup,
+  Divider,
   Flex,
   IconButton,
   Modal,
@@ -27,17 +28,21 @@ import {
   Text,
   Th,
   Thead,
+  Tag,
   Tr,
   Tooltip,
+  Wrap,
+  WrapItem,
   useDisclosure,
   useToast,
 } from '@chakra-ui/react';
-import { RepeatIcon, SettingsIcon } from '@chakra-ui/icons';
+import { SettingsIcon } from '@chakra-ui/icons';
 import { Dispatch, useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   PRE_FLOP_SEQUENCE_ORDER,
   POST_FLOP_SEQUENCE_ORDER,
+  ActionType,
   SeatAction,
   SeatPosition,
   SeatState,
@@ -47,6 +52,8 @@ import {
   TableComposerState,
   STREET_ORDER,
 } from '../state/tableComposer';
+import { DerivedFiltersPanel } from './DerivedFiltersPanel';
+import { FLOP_TEXTURE_DEFINITIONS, TURN_RIVER_TEXTURE_DEFINITIONS } from './boardTextureDefinitions';
 
 export type BucketOption = { key: string; label: string };
 
@@ -101,6 +108,33 @@ type PotTimeline = {
   totalPot: number;
   streetStartPot: Record<Street, number>;
   blindsTotal: number;
+};
+
+type StepFilterSummary = {
+  step: StreetActionStep;
+  action?: SeatAction;
+  snapshot?: ActionSnapshot;
+  seat?: SeatState;
+  aliveBefore: string[];
+  aliveAfter: string[];
+};
+
+type DerivedFilter = {
+  id: string;
+  label: string;
+  detail?: string;
+};
+
+type FilterCategory = {
+  key: string;
+  title: string;
+  filters: DerivedFilter[];
+};
+
+type HighlightFilters = {
+  selectionLabel: string;
+  categories: FilterCategory[];
+  boardCategories: FilterCategory[];
 };
 
 const DEFAULT_STACK_SIZE = 100;
@@ -194,7 +228,342 @@ const formatBB = (value: number): string => {
   if (!Number.isFinite(value) || Math.abs(value) < 1e-6) {
     return '0';
   }
-  return value.toFixed(2).replace(/\.00$/, '');
+  return value
+    .toFixed(2)
+    .replace(/\.00$/, '')
+    .replace(/(\.\d)0$/, '$1');
+};
+
+const formatPercent = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return 'n/a';
+  }
+  return `${(value * 100).toFixed(0)}%`;
+};
+
+const STREET_TITLES: Record<Street, string> = {
+  preflop: 'Preflop',
+  flop: 'Flop',
+  turn: 'Turn',
+  river: 'River',
+};
+
+const BOARD_TITLES: Record<BoardStreet, string> = {
+  flop: 'Flop Board',
+  turn: 'Turn Board',
+  river: 'River Board',
+};
+
+const capitalize = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
+
+const rankToValue = (rank: string): number => {
+  switch (rank) {
+    case 'A':
+      return 14;
+    case 'K':
+      return 13;
+    case 'Q':
+      return 12;
+    case 'J':
+      return 11;
+    case 'T':
+      return 10;
+    default:
+      return parseInt(rank, 10);
+  }
+};
+
+const isConnectedRanks = (values: number[]): boolean => {
+  if (values.length < 3) {
+    return false;
+  }
+  const uniqueSorted = Array.from(new Set(values)).sort((a, b) => a - b);
+  if (uniqueSorted.length < 3) {
+    return false;
+  }
+  if (uniqueSorted[uniqueSorted.length - 1] - uniqueSorted[0] <= 4) {
+    return true;
+  }
+  if (uniqueSorted.includes(14)) {
+    const adjusted = uniqueSorted.map((value) => (value === 14 ? 1 : value)).sort((a, b) => a - b);
+    return adjusted[adjusted.length - 1] - adjusted[0] <= 4;
+  }
+  return false;
+};
+
+const findConsecutiveRuns = (values: number[]): number[] => {
+  if (values.length < 3) {
+    return [];
+  }
+  const uniqueSorted = Array.from(new Set(values)).sort((a, b) => a - b);
+  const result: number[] = [];
+  let currentRun = 1;
+  for (let i = 1; i < uniqueSorted.length; i += 1) {
+    const prev = uniqueSorted[i - 1];
+    const current = uniqueSorted[i];
+    if (current === prev + 1 || (prev === 13 && current === 14)) {
+      currentRun += 1;
+    } else if (prev === 14 && current === 2) {
+      currentRun += 1;
+    } else {
+      if (currentRun >= 3) {
+        result.push(currentRun);
+      }
+      currentRun = 1;
+    }
+  }
+  if (currentRun >= 3) {
+    result.push(currentRun);
+  }
+  return result;
+};
+
+const deriveBoardTextures = (cards: string[]): string[] => {
+  if (cards.length < 3) {
+    return [];
+  }
+  const suits = cards.map((card) => card[1]);
+  const ranks = cards.map((card) => card[0]);
+  const values = ranks.map(rankToValue);
+  const suitCount = new Set(suits).size;
+  const textures = new Set<string>();
+
+  if (suitCount === cards.length) {
+    textures.add('Rainbow');
+  }
+  if (suitCount === 1) {
+    textures.add('Monotone');
+  }
+  if (suitCount === 2) {
+    textures.add('Two Tone');
+  }
+
+  const suitFrequency = suits.reduce<Record<string, number>>((acc, suit) => {
+    acc[suit] = (acc[suit] ?? 0) + 1;
+    return acc;
+  }, {});
+  const maxSuitCount = Math.max(...Object.values(suitFrequency));
+  if (maxSuitCount >= 3 && maxSuitCount <= 5) {
+    textures.add(`${maxSuitCount} Suited Cards`);
+  }
+
+  const counts = ranks.reduce<Record<string, number>>((acc, rank) => {
+    acc[rank] = (acc[rank] ?? 0) + 1;
+    return acc;
+  }, {});
+  const rankFrequencies = Object.values(counts);
+  if (rankFrequencies.some((count) => count >= 2)) {
+    textures.add('Paired');
+  }
+  if (rankFrequencies.some((count) => count === 3)) {
+    textures.add('Trips');
+  }
+  if (rankFrequencies.some((count) => count >= 4)) {
+    textures.add('Quads');
+  }
+
+  if (isConnectedRanks(values)) {
+    textures.add('Connected (≤4 Gap)');
+  }
+
+  const connectedRuns = findConsecutiveRuns(values);
+  connectedRuns.forEach((runLength) => {
+    if (runLength >= 3 && runLength <= 5) {
+      textures.add(`${runLength} Connected Ranks`);
+    }
+  });
+
+  const hasAce = ranks.includes('A');
+  if (hasAce && Math.max(...values) === 14) {
+    textures.add('Ace High');
+  }
+  if (values.every((value) => value <= 10)) {
+    textures.add('Low (≤ Ten)');
+  }
+  const broadwayCount = values.filter((value) => value >= 11).length;
+  if (broadwayCount >= 2) {
+    textures.add('High Broadway');
+  }
+
+  return Array.from(textures);
+};
+
+const deriveFlopTextures = (cards: string[]): string[] => deriveBoardTextures(cards);
+
+const mapBetBucket = (amount: number, potBefore: number, stackAfter?: number): string | null => {
+  const epsilon = 1e-6;
+  if (amount <= epsilon) {
+    return null;
+  }
+  if (stackAfter !== undefined && stackAfter <= epsilon) {
+    return 'All-In';
+  }
+  if (potBefore <= epsilon && Math.abs(amount - 1) <= 0.05) {
+    return '1 BB';
+  }
+  const ratio = potBefore > epsilon ? amount / potBefore : 0;
+  if (ratio < 0.25) {
+    return '0-25% Pot';
+  }
+  if (ratio < 0.4) {
+    return '25-40% Pot';
+  }
+  if (ratio < 0.6) {
+    return '40-60% Pot';
+  }
+  if (ratio < 0.8) {
+    return '60-80% Pot';
+  }
+  if (ratio < 1.0) {
+    return '80-100% Pot';
+  }
+  if (ratio < 2.0) {
+    return '100-200% Pot';
+  }
+  return '100-200% Pot';
+};
+
+const categorizeEffectiveStack = (value: number): string => {
+  const normalized = Math.max(value, 0);
+  if (normalized < 50) {
+    return '0-50 BB';
+  }
+  if (normalized < 100) {
+    return '50-100 BB';
+  }
+  return '100+ BB';
+};
+
+const categorizeSPR = (spr: number): string => {
+  if (spr < 1) {
+    return '0-1';
+  }
+  if (spr < 2) {
+    return '1-2';
+  }
+  if (spr < 3) {
+    return '2-3';
+  }
+  if (spr < 4) {
+    return '3-4';
+  }
+  return '4+';
+};
+
+const mapPotOddsBucket = (ratio: number | null): string | null => {
+  if (ratio === null || !Number.isFinite(ratio)) {
+    return null;
+  }
+  if (ratio < 0.25) {
+    return '0-25%';
+  }
+  if (ratio < 0.4) {
+    return '25-40%';
+  }
+  if (ratio < 0.6) {
+    return '40-60%';
+  }
+  if (ratio < 0.8) {
+    return '60-80%';
+  }
+  if (ratio < 1) {
+    return '80-100%';
+  }
+  return '100%+';
+};
+
+const deriveBetBucket = (summary: StepFilterSummary): { label: string; bucket: string; detail?: string; id: string } | null => {
+  const { action, snapshot } = summary;
+  if (!action || !snapshot) {
+    return null;
+  }
+  if (action.action === 'check' || action.action === 'fold') {
+    return null;
+  }
+  if (action.action === 'call' || action.action === 'limp') {
+    const facing = Math.max(snapshot.toCall ?? 0, snapshot.resultAdded ?? 0);
+    const bucket = mapBetBucket(facing, snapshot.potBefore, snapshot.stackAfter);
+    if (!bucket) {
+      return null;
+    }
+    const potBefore = snapshot.potBefore ?? 0;
+    const ratio = potBefore > 1e-6 ? facing / potBefore : null;
+    return {
+      label: 'Facing Bet Bucket',
+      id: `facing-bucket-${summary.step.id}`,
+      bucket,
+      detail:
+        ratio !== null
+          ? `${formatBB(facing)} / ${formatBB(potBefore)} = ${formatPercent(ratio)}`
+          : `${formatBB(facing)} BB`,
+    };
+  }
+  const added = snapshot.resultAdded ?? 0;
+  const bucket = mapBetBucket(added, snapshot.potBefore, snapshot.stackAfter);
+  if (!bucket) {
+    return null;
+  }
+  const descriptor =
+    action.action === 'raise'
+      ? `Raise to ${formatBB(snapshot.resultContribution ?? added)} ${BIG_BLIND_SYMBOL}`
+      : action.action === 'open'
+        ? `Opens to ${formatBB(snapshot.resultContribution ?? added)} ${BIG_BLIND_SYMBOL}`
+        : `Bet size ${formatBB(added)} ${BIG_BLIND_SYMBOL}`;
+  return {
+    label: 'Bet Size Bucket',
+    bucket,
+    detail: descriptor,
+    id: `bet-bucket-${summary.step.id}`,
+  };
+};
+
+const lineLetterForAction = (action: ActionType): string | null => {
+  switch (action) {
+    case 'fold':
+      return 'F';
+    case 'check':
+      return 'X';
+    case 'call':
+      return 'C';
+    case 'limp':
+      return 'L';
+    case 'open':
+    case 'raise':
+      return 'R';
+    case 'bet':
+      return 'B';
+    case 'all_in':
+      return 'A';
+    default:
+      return null;
+  }
+};
+
+const deriveRelativePositionLabel = (
+  street: Street,
+  summary: StepFilterSummary,
+  seat: SeatState,
+  seatLookup: Map<string, SeatState>,
+): string | null => {
+  const order = street === 'preflop' ? PRE_FLOP_SEQUENCE_ORDER : POST_FLOP_SEQUENCE_ORDER;
+  const aliveSeats = summary.aliveBefore
+    .map((seatId) => seatLookup.get(seatId))
+    .filter((value): value is SeatState => Boolean(value))
+    .sort((a, b) => order.indexOf(a.position) - order.indexOf(b.position));
+  if (aliveSeats.length === 0) {
+    return null;
+  }
+  const index = aliveSeats.findIndex((entry) => entry.seatId === seat.seatId);
+  if (index === -1) {
+    return null;
+  }
+  if (index === 0) {
+    return 'Early';
+  }
+  if (index === aliveSeats.length - 1) {
+    return 'Late';
+  }
+  return 'Middle';
 };
 
 const isAggressiveAction = (action: SeatAction | undefined) => {
@@ -574,6 +943,8 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
   const toast = useToast();
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [boardEditorState, setBoardEditorState] = useState<BoardEditorState | null>(null);
+  const [highlight, setHighlight] = useState<{ street: Street; stepId: string } | null>(null);
+  const [disabledFilters, setDisabledFilters] = useState<Set<string>>(() => new Set());
 
   const seatMap = useMemo(() => {
     const map = new Map<string, SeatState>();
@@ -610,6 +981,16 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
 
   const potTimeline = useMemo(() => buildPotTimeline(state), [state]);
   const { totalPot, streetStartPot, blindsTotal, actionContext } = potTimeline;
+
+  useEffect(() => {
+    if (!highlight) {
+      return;
+    }
+    const sequence = state.streetSequences[highlight.street] ?? [];
+    if (!sequence.some((step) => step.id === highlight.stepId)) {
+      setHighlight(null);
+    }
+  }, [highlight, state.streetSequences]);
 
   const openEditor = (step: StreetActionStep, street: Street) => {
     const seat = seatMap.get(step.seatId);
@@ -693,207 +1074,565 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
 
   const showPotForPosition = currentStreetIndex >= 0 && blindsTotal > 0;
   const showAnyBoard = BOARD_STREETS.some((street) => (state.board[street] ?? []).length > 0);
+  const highlightFilters = useMemo<HighlightFilters | null>(() => {
+    if (!highlight) {
+      return null;
+    }
+    const highlightSequence = state.streetSequences[highlight.street] ?? [];
+    const highlightIndex = highlightSequence.findIndex((step) => step.id === highlight.stepId);
+    if (highlightIndex === -1) {
+      return null;
+    }
+    const highlightStep = highlightSequence[highlightIndex];
+    const highlightSeat = seatMap.get(highlightStep.seatId);
+    if (!highlightSeat) {
+      return null;
+    }
+    const initialActiveSeats = state.seats.filter((seat) => seat.isActive);
+    const initialActiveIds = initialActiveSeats.map((seat) => seat.seatId);
+    const alive = new Set(initialActiveIds);
+    const streetSummaries = new Map<Street, { steps: StepFilterSummary[] }>();
+    const highlightStreetIndex = STREET_ORDER.indexOf(highlight.street);
+
+    const getInitialStack = (seat?: SeatState): number => {
+      if (!seat) {
+        return DEFAULT_STACK_SIZE;
+      }
+      let base = seat.startingStack ?? DEFAULT_STACK_SIZE;
+      if (seat.position === 'SB') {
+        base -= 0.5;
+      } else if (seat.position === 'BB') {
+        base -= 1;
+      }
+      return Math.max(base, 0);
+    };
+
+    const seatStack = new Map<string, number>();
+    initialActiveSeats.forEach((seat) => {
+      seatStack.set(seat.seatId, getInitialStack(seat));
+    });
+
+    STREET_ORDER.forEach((street) => {
+      const sequence = state.streetSequences[street] ?? [];
+      const streetIndex = STREET_ORDER.indexOf(street);
+      let limit = sequence.length;
+      if (streetIndex > highlightStreetIndex) {
+        limit = 0;
+      } else if (streetIndex === highlightStreetIndex) {
+        limit = highlightIndex + 1;
+      }
+      const steps: StepFilterSummary[] = [];
+      for (let i = 0; i < limit; i += 1) {
+        const step = sequence[i];
+        const action = state.stepActions[step.id];
+        const snapshot = potTimeline.actionContext.get(step.id);
+        const aliveBefore = Array.from(alive);
+        if (action?.action === 'fold') {
+          alive.delete(step.seatId);
+        }
+        const aliveAfter = Array.from(alive);
+        const summary: StepFilterSummary = {
+          step,
+          action,
+          snapshot,
+          seat: seatMap.get(step.seatId),
+          aliveBefore,
+          aliveAfter,
+        };
+        steps.push(summary);
+        if (snapshot && typeof snapshot.stackAfter === 'number') {
+          seatStack.set(step.seatId, snapshot.stackAfter);
+        }
+      }
+      streetSummaries.set(street, { steps });
+    });
+
+    const buildStreetFilters = (street: Street): DerivedFilter[] => {
+      const summary = streetSummaries.get(street);
+    if (!summary) {
+      return [];
+    }
+    let targetEntry: StepFilterSummary | undefined;
+    if (street === highlight.street) {
+      targetEntry = summary.steps.find((entry) => entry.step.id === highlight.stepId);
+    } else {
+      const seatSteps = summary.steps.filter((entry) => entry.step.seatId === highlightSeat.seatId);
+      targetEntry = seatSteps[seatSteps.length - 1];
+    }
+    if (!targetEntry) {
+      return [];
+    }
+    const filters: DerivedFilter[] = [];
+    const baseId = `${street}-${highlightSeat.seatId}`;
+    const targetIndex = summary.steps.findIndex((entry) => entry.step.id === targetEntry!.step.id);
+    const seatEntries = summary.steps
+      .map((entry, idx) => ({ entry, idx }))
+      .filter(({ entry }) => entry.step.seatId === highlightSeat.seatId && entry.action);
+    const relevantEntries = seatEntries.filter(({ idx }) => idx <= targetIndex);
+    const actionLine =
+      relevantEntries
+        .map(({ entry }) => lineLetterForAction(entry.action!.action))
+        .filter((value): value is string => Boolean(value))
+        .join('') || '—';
+
+    filters.push({
+      id: `${baseId}-seat-position`,
+      label: `Seat Position: ${highlightSeat.position}`,
+    });
+    const relative = deriveRelativePositionLabel(street, targetEntry, highlightSeat, seatMap);
+      if (relative) {
+        filters.push({
+          id: `${baseId}-relative`,
+          label: `Relative Position: ${relative}`,
+        });
+      }
+    const playersRemaining = targetEntry.aliveAfter.length;
+    filters.push({
+      id: `${baseId}-players`,
+      label: `Players Remaining: ${playersRemaining}`,
+    });
+    filters.push({
+      id: `${baseId}-action-line`,
+      label: `Action: ${actionLine}`,
+    });
+
+    if (
+      street === 'preflop' &&
+      targetEntry.action?.action === 'raise' &&
+      summary.steps.slice(0, targetIndex).some((entry) => entry.action && isAggressiveAction(entry.action) && entry.step.seatId !== highlightSeat.seatId)
+    ) {
+      filters.push({
+        id: `${baseId}-three-bet`,
+        label: '3-Bet Preflop',
+      });
+    }
+
+    if (targetEntry.action && (targetEntry.action.action === 'call' || targetEntry.action.action === 'limp')) {
+      const snapshot = targetEntry.snapshot;
+      if (snapshot) {
+        const toCall = Math.max(snapshot.toCall ?? 0, snapshot.resultAdded ?? 0);
+        const totalPot = (snapshot.potBefore ?? 0) + toCall;
+        if (toCall > 1e-6 && totalPot > 1e-6) {
+          const potOdds = toCall / totalPot;
+          const bucketLabel = mapPotOddsBucket(potOdds) ?? (potOdds !== null ? formatPercent(potOdds) : 'n/a');
+          filters.push({
+            id: `${baseId}-pot-odds`,
+            label: `Pot Odds: ${bucketLabel}`,
+            detail: `${formatBB(toCall)} / ${formatBB(totalPot)} = ${potOdds !== null ? formatPercent(potOdds) : 'n/a'}`,
+          });
+        }
+      }
+    }
+
+    const betBucket = deriveBetBucket(targetEntry);
+    if (betBucket) {
+      const bucketText = betBucket.bucket.replace(' Pot', '');
+      filters.push({
+        id: `${betBucket.id}-${street}`,
+        label: betBucket.detail
+          ? `${betBucket.label}: ${bucketText} (${betBucket.detail})`
+          : `${betBucket.label}: ${bucketText}`,
+      });
+    }
+    return filters;
+  };
+
+    const positionFilters: DerivedFilter[] = [
+      {
+        id: 'position-players-dealt',
+        label: `Players Dealt: ${initialActiveIds.length}`,
+      },
+    ];
+
+    const targetSummary = streetSummaries.get(highlight.street)?.steps.find(
+      (entry) => entry.step.id === highlight.stepId,
+    );
+    let stackFilters: DerivedFilter[] = [];
+    if (targetSummary?.snapshot) {
+      const heroStackBefore =
+        targetSummary.snapshot.stackBefore ?? getInitialStack(highlightSeat);
+      const opponentStacks = targetSummary.aliveBefore
+        .filter((seatId) => seatId !== highlightSeat.seatId)
+        .map((seatId) => {
+          if (seatStack.has(seatId)) {
+            return seatStack.get(seatId)!;
+          }
+          return getInitialStack(seatMap.get(seatId));
+        });
+      const minOpponentStack =
+        opponentStacks.length > 0 ? Math.min(...opponentStacks) : heroStackBefore;
+      const effectiveStack = Math.min(heroStackBefore, minOpponentStack);
+      if (Number.isFinite(effectiveStack)) {
+        const bucketLabel = categorizeEffectiveStack(effectiveStack);
+        stackFilters = [
+          {
+            id: 'stack-effective',
+            label: `Effective Stack: ${bucketLabel}`,
+            detail: `${formatBB(effectiveStack)} ${BIG_BLIND_SYMBOL}`,
+          },
+        ];
+        const potBeforeStreet = streetStartPot[highlight.street] ?? 0;
+        const spr = potBeforeStreet > 1e-6 ? effectiveStack / potBeforeStreet : null;
+        if (spr !== null) {
+          stackFilters.push({
+            id: 'stack-spr',
+            label: `SPR Bucket: ${categorizeSPR(spr)}`,
+            detail: `${spr.toFixed(2)} (${formatBB(effectiveStack)} / ${formatBB(potBeforeStreet)})`,
+          });
+        }
+      }
+    }
+
+    const lineSegments: string[] = [];
+
+    STREET_ORDER.forEach((street) => {
+      const streetIndex = STREET_ORDER.indexOf(street);
+      if (streetIndex > highlightStreetIndex) {
+        return;
+      }
+      const summary = streetSummaries.get(street);
+      if (!summary) {
+        return;
+      }
+      const seatEntries = summary.steps
+        .map((entry, idx) => ({ entry, idx }))
+        .filter(({ entry }) => entry.step.seatId === highlightSeat.seatId && entry.action);
+      if (seatEntries.length === 0) {
+        return;
+      }
+      const highlightIdx = street === highlight.street ? summary.steps.findIndex((entry) => entry.step.id === highlight.stepId) : null;
+      const relevantEntries = seatEntries.filter(({ idx }) => highlightIdx === null || idx <= highlightIdx);
+      if (relevantEntries.length === 0) {
+        return;
+      }
+      const letters = relevantEntries
+        .map(({ entry }) => lineLetterForAction(entry.action!.action))
+        .filter((value): value is string => Boolean(value))
+        .join('');
+      if (!letters) {
+        return;
+      }
+      lineSegments.push(letters);
+    });
+
+    const lineFilter: DerivedFilter | null =
+      lineSegments.length > 0
+        ? {
+            id: `line-${highlightSeat.seatId}-${highlight.street}`,
+            label: `Line: ${lineSegments.join('-')}`,
+          }
+        : null;
+
+    const streetFilters: FilterCategory[] = STREET_ORDER.map((street) => ({
+      key: street,
+      title: STREET_TITLES[street],
+      filters: buildStreetFilters(street),
+    }));
+
+    const boardFilters = BOARD_STREETS.map((street) => {
+      const streetIndex = STREET_ORDER.indexOf(street as Street);
+      const isVisible = highlightStreetIndex >= streetIndex;
+      if (!isVisible) {
+        return { key: street, title: BOARD_TITLES[street], filters: [] as DerivedFilter[] };
+      }
+      const cards = state.board[street] ?? [];
+      if (cards.length === 0) {
+        return { key: street, title: BOARD_TITLES[street], filters: [] as DerivedFilter[] };
+      }
+      const textures = street === 'flop' ? deriveFlopTextures(cards) : deriveBoardTextures(cards);
+      const allowedTextures = street === 'flop'
+        ? textures.filter((texture) => texture in FLOP_TEXTURE_DEFINITIONS)
+        : textures.filter((texture) => texture in TURN_RIVER_TEXTURE_DEFINITIONS);
+      const filters: DerivedFilter[] = allowedTextures.map((texture, index) => ({
+        id: `${street}-texture-${texture.toLowerCase().replace(/\s+/g, '-')}-${index}`,
+        label: texture,
+      }));
+      return { key: street, title: BOARD_TITLES[street], filters };
+    });
+
+    const categories: FilterCategory[] = [
+      { key: 'position', title: 'Position', filters: positionFilters },
+      { key: 'stack', title: 'Stack Size', filters: stackFilters },
+      { key: 'line', title: 'Line', filters: lineFilter ? [lineFilter] : [] },
+      ...streetFilters,
+    ];
+
+    return {
+      selectionLabel: `${highlightSeat.position} · ${STREET_TITLES[highlight.street]}`,
+      categories,
+      boardCategories: boardFilters,
+    };
+  }, [
+    highlight,
+    potTimeline.actionContext,
+    seatMap,
+    state.board,
+    state.seats,
+    state.stepActions,
+    state.streetSequences,
+  ]);
+
+  useEffect(() => {
+    if (!highlightFilters) {
+      setDisabledFilters(new Set());
+      return;
+    }
+    const availableIds = new Set<string>();
+    highlightFilters.categories.forEach((category) => {
+      category.filters.forEach((filter) => availableIds.add(filter.id));
+    });
+    highlightFilters.boardCategories.forEach((category) => {
+      category.filters.forEach((filter) => availableIds.add(filter.id));
+    });
+    setDisabledFilters((previous) => {
+      let changed = false;
+      const next = new Set<string>();
+      previous.forEach((id) => {
+        if (availableIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : previous;
+    });
+  }, [highlightFilters]);
+
+  const toggleFilter = useCallback((id: string) => {
+    setDisabledFilters((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
   return (
-    <Stack spacing={4} w="full">
-      <Flex justify="space-between" align="center" wrap="wrap" gap={4}>
-        <Text fontSize="sm" color="whiteAlpha.700">
-          Total pot: {formatBB(totalPot)} {BIG_BLIND_SYMBOL}
-        </Text>
-        <ButtonGroup size="sm" variant="outline">
-          <Tooltip label="Undo">
-            <IconButton aria-label="Undo" icon={<RepeatIcon style={{ transform: 'scaleX(-1)' }} />} onClick={() => dispatch({ type: 'undo' })} />
-          </Tooltip>
-          <Tooltip label="Redo">
-            <IconButton aria-label="Redo" icon={<RepeatIcon />} onClick={() => dispatch({ type: 'redo' })} />
-          </Tooltip>
-          <Tooltip label="Reset table">
-            <IconButton aria-label="Reset" icon={<SettingsIcon />} onClick={() => dispatch({ type: 'reset' })} />
-          </Tooltip>
-        </ButtonGroup>
-      </Flex>
+    <>
+      <Stack spacing={4} w="full">
+        <Flex justify="space-between" align="center" wrap="wrap" gap={4}>
+          <Text fontSize="sm" color="whiteAlpha.700">
+            Total pot: {formatBB(totalPot)} {BIG_BLIND_SYMBOL}
+          </Text>
+          <ButtonGroup size="sm" variant="outline">
+            <Tooltip label="Reset table">
+              <IconButton aria-label="Reset" icon={<SettingsIcon />} onClick={() => dispatch({ type: 'reset' })} />
+            </Tooltip>
+          </ButtonGroup>
+        </Flex>
 
-      <Flex gap={4} overflowX="auto" overflowY="visible" align="stretch">
-        <Stack key="position" spacing={showAnyBoard ? 2 : 0} align="center" minW="140px">
-          {showAnyBoard ? (
-            <Box
-              h={`${BOARD_CARD_ROW_HEIGHT}px`}
-              display="flex"
-              alignItems="center"
-              justifyContent="center"
-            />
-          ) : null}
-          <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" w="full">
-            <Table size="sm" variant="simple">
-            <Thead>
-              <Tr>
-                <Th textAlign="center">
-                  <Stack spacing={1} align="center">
-                    <Text fontWeight="semibold">Position</Text>
-                    <Text fontSize="xs" color="whiteAlpha.600" visibility={showPotForPosition ? 'visible' : 'hidden'}>
-                      {showPotForPosition ? `${formatBB(blindsTotal)} ${BIG_BLIND_SYMBOL}` : '\u00A0'}
-                    </Text>
-                  </Stack>
-                </Th>
-              </Tr>
-            </Thead>
-            <Tbody>
-              {positionSeats.map((seat) => {
-                const rawStack = seat.startingStack ?? DEFAULT_STACK_SIZE;
-                const adjustedStack =
-                  seat.position === 'SB' ? rawStack - 0.5 : seat.position === 'BB' ? rawStack - 1 : rawStack;
-                return (
-                  <Tr key={seat.seatId}>
-                    <Td textAlign="center" height={ROW_HEIGHT} py={2}>
-                      <Stack spacing={1} align="center" justify="center" h="full">
-                        <Flex justify="center" align="baseline" gap={2}>
-                          <Text fontWeight="semibold">{seat.position}</Text>
-                          <Text fontSize="0.65rem" color="whiteAlpha.600">
-                            ({formatBB(Math.max(adjustedStack, 0))} {BIG_BLIND_SYMBOL})
-                          </Text>
-                      </Flex>
-                        {seat.position === 'SB' && (
-                          <Text fontSize="xs" color="whiteAlpha.500">
-                            Posts 0.5 {BIG_BLIND_SYMBOL}
-                          </Text>
-                        )}
-                        {seat.position === 'BB' && (
-                          <Text fontSize="xs" color="whiteAlpha.500">
-                            Posts 1 {BIG_BLIND_SYMBOL}
-                          </Text>
-                        )}
-                      </Stack>
-                    </Td>
-                  </Tr>
-                );
-              })}
-            </Tbody>
-            </Table>
-          </Box>
-        </Stack>
-
-        {STREET_ORDER.map((street) => {
-          const sequence = state.streetSequences[street] ?? [];
-          const canEditStreet = isStreetEditable(streetCompletion, street);
-          const showPot = showPotForStreet(street);
-          const isBoardStreet = street === 'flop' || street === 'turn' || street === 'river';
-          const boardCards = isBoardStreet ? state.board[street as BoardStreet] ?? [] : [];
-          const showBoard = isBoardStreet && boardCards.length > 0;
-          return (
-            <Stack key={street} spacing={showBoard || showAnyBoard ? 2 : 0} align="center" minW="160px">
-              {(showBoard || showAnyBoard) && (
-                <Box
-                  h={`${BOARD_CARD_ROW_HEIGHT}px`}
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                >
-                  {showBoard ? (
-                    <HStack spacing={1.5} align="center">
-                      {boardCards.map((card) => renderBoardCardToken(card))}
-                      <Button size="xs" variant="link" onClick={() => openBoardEditor(street as BoardStreet)}>
-                        Edit
-                      </Button>
-                    </HStack>
-                  ) : null}
-                </Box>
-              )}
-              <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" w="full">
-                <Table size="sm" variant="simple">
-                  <Thead>
-                    <Tr>
-                      <Th textAlign="center">
-                        <Stack spacing={1} align="center">
-                          <Text fontWeight="semibold">{streetHeader(street)}</Text>
-                        <Text fontSize="xs" color="whiteAlpha.600" visibility={showPot ? 'visible' : 'hidden'}>
-                          {showPot ? `${formatBB(streetStartPot[street] ?? 0)} ${BIG_BLIND_SYMBOL}` : '\u00A0'}
+        <Flex gap={4} overflowX="auto" overflowY="visible" align="stretch">
+          <Stack key="position" spacing={showAnyBoard ? 2 : 0} align="center" minW="140px">
+            {showAnyBoard ? (
+              <Box
+                h={`${BOARD_CARD_ROW_HEIGHT}px`}
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+              />
+            ) : null}
+            <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" w="full">
+              <Table size="sm" variant="simple">
+                <Thead>
+                  <Tr>
+                    <Th textAlign="center">
+                      <Stack spacing={1} align="center">
+                        <Text fontWeight="semibold">Position</Text>
+                        <Text fontSize="xs" color="whiteAlpha.600" visibility={showPotForPosition ? 'visible' : 'hidden'}>
+                          {showPotForPosition ? `${formatBB(blindsTotal)} ${BIG_BLIND_SYMBOL}` : ' '}
                         </Text>
                       </Stack>
                     </Th>
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {sequence.length === 0 ? (
-                    <Tr>
-                      <Td textAlign="center" height={ROW_HEIGHT}>
-                        <Stack spacing={1} align="center" justify="center" h="full">
-                          <Text color="whiteAlpha.500" fontSize="sm">
-                            —
-                          </Text>
-                        </Stack>
-                      </Td>
-                    </Tr>
-                  ) : (
-                    sequence.map((step, index) => {
-                      const seat = seatMap.get(step.seatId);
-                      if (!seat) {
-                        return null;
-                      }
-                      const action = state.stepActions[step.id];
-                      const occurrence = getOccurrenceIndex(sequence, index);
-                      const label = occurrence > 1 ? `${seat.position} (${occurrence})` : seat.position;
-                      const foldStreet = findFoldStreetBefore(seat, street);
-                      const canEditStep = canEditStreet;
-                      const snapshot = actionContext.get(step.id);
-                      const stackAfter = snapshot?.stackAfter;
-                      const contributionBefore = snapshot?.contribution ?? 0;
-                      const totalContribution = snapshot?.resultContribution ?? contributionBefore;
-                      const addedAmount = snapshot?.resultAdded ?? Math.max(totalContribution - contributionBefore, 0);
-                      let badgeOverride: string | undefined;
-                      if (action) {
-                        if (action.action === 'bet') {
-                          if (addedAmount > 0) {
-                            badgeOverride = `BET (${formatBB(addedAmount)} ${BIG_BLIND_SYMBOL})`;
-                          }
-                        } else if (action.action === 'open') {
-                          if (totalContribution > 0) {
-                            badgeOverride = `OPEN (${formatBB(totalContribution)} ${BIG_BLIND_SYMBOL})`;
-                          }
-                        } else if (action.action === 'raise') {
-                          if (totalContribution > 0) {
-                            badgeOverride = `RAISE (to ${formatBB(totalContribution)} ${BIG_BLIND_SYMBOL})`;
-                          } else if (addedAmount > 0) {
-                            badgeOverride = `RAISE (${formatBB(addedAmount)} ${BIG_BLIND_SYMBOL})`;
-                          }
-                        }
-                      }
-                      return (
-                        <Tr key={step.id}>
-                          <Td textAlign="center" height={ROW_HEIGHT} py={2}>
+                  {positionSeats.map((seat) => {
+                    const rawStack = seat.startingStack ?? DEFAULT_STACK_SIZE;
+                    const adjustedStack =
+                      seat.position === 'SB' ? rawStack - 0.5 : seat.position === 'BB' ? rawStack - 1 : rawStack;
+                    return (
+                      <Tr key={seat.seatId}>
+                        <Td textAlign="center" height={ROW_HEIGHT} py={2}>
+                          <Stack spacing={1} align="center" justify="center" h="full">
+                            <Flex justify="center" align="baseline" gap={2}>
+                              <Text fontWeight="semibold">{seat.position}</Text>
+                              <Text fontSize="0.65rem" color="whiteAlpha.600">
+                                ({formatBB(Math.max(adjustedStack, 0))} {BIG_BLIND_SYMBOL})
+                              </Text>
+                            </Flex>
+                            {seat.position === 'SB' && (
+                              <Text fontSize="xs" color="whiteAlpha.500">
+                                Posts 0.5 {BIG_BLIND_SYMBOL}
+                              </Text>
+                            )}
+                            {seat.position === 'BB' && (
+                              <Text fontSize="xs" color="whiteAlpha.500">
+                                Posts 1 {BIG_BLIND_SYMBOL}
+                              </Text>
+                            )}
+                          </Stack>
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </Tbody>
+              </Table>
+            </Box>
+          </Stack>
+
+          {STREET_ORDER.map((street) => {
+            const sequence = state.streetSequences[street] ?? [];
+            const canEditStreet = isStreetEditable(streetCompletion, street);
+            const showPot = showPotForStreet(street);
+            const isBoardStreet = street === 'flop' || street === 'turn' || street === 'river';
+            const boardCards = isBoardStreet ? state.board[street as BoardStreet] ?? [] : [];
+            const showBoard = isBoardStreet && boardCards.length > 0;
+            return (
+              <Stack key={street} spacing={showBoard || showAnyBoard ? 2 : 0} align="center" minW="160px">
+                {(showBoard || showAnyBoard) && (
+                  <Box
+                    h={`${BOARD_CARD_ROW_HEIGHT}px`}
+                    display="flex"
+                    alignItems="center"
+                    justifyContent="center"
+                  >
+                    {showBoard ? (
+                      <HStack spacing={1.5} align="center">
+                        {boardCards.map((card) => renderBoardCardToken(card))}
+                        <Button size="xs" variant="link" onClick={() => openBoardEditor(street as BoardStreet)}>
+                          Edit
+                        </Button>
+                      </HStack>
+                    ) : null}
+                  </Box>
+                )}
+                <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" w="full">
+                  <Table size="sm" variant="simple">
+                    <Thead>
+                      <Tr>
+                        <Th textAlign="center">
+                          <Stack spacing={1} align="center">
+                            <Text fontWeight="semibold">{streetHeader(street)}</Text>
+                            <Text fontSize="xs" color="whiteAlpha.600" visibility={showPot ? 'visible' : 'hidden'}>
+                              {showPot ? `${formatBB(streetStartPot[street] ?? 0)} ${BIG_BLIND_SYMBOL}` : ' '}
+                            </Text>
+                          </Stack>
+                        </Th>
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {sequence.length === 0 ? (
+                        <Tr>
+                          <Td textAlign="center" height={ROW_HEIGHT}>
                             <Stack spacing={1} align="center" justify="center" h="full">
-                              <Flex justify="center" align="baseline" gap={2}>
-                                <Text fontWeight="semibold">{label}</Text>
-                                {action && typeof stackAfter === 'number' && !foldStreet && (
-                                  <Text fontSize="0.65rem" color="whiteAlpha.600">
-                                    ({formatBB(stackAfter)} {BIG_BLIND_SYMBOL} Behind)
-                                  </Text>
-                                )}
-                              </Flex>
-                              {foldStreet ? (
-                                <Text fontSize="xs" color="whiteAlpha.500">
-                                  Folded {foldStreet.toUpperCase()}
-                                </Text>
-                              ) : (
-                                renderActionBadge(action, badgeOverride)
-                              )}
-                              {canEditStep && !foldStreet && (
-                                <Button size="xs" variant="link" onClick={() => openEditor(step, street)}>
-                                  {action ? 'Edit' : 'Edit Action'}
-                                </Button>
-                              )}
+                              <Text color="whiteAlpha.500" fontSize="sm">
+                                —
+                              </Text>
                             </Stack>
                           </Td>
                         </Tr>
-                      );
-                    })
-                  )}
-                </Tbody>
-                </Table>
-              </Box>
-            </Stack>
-          );
-        })}
-      </Flex>
+                      ) : (
+                        sequence.map((step, index) => {
+                          const seat = seatMap.get(step.seatId);
+                          if (!seat) {
+                            return null;
+                          }
+                          const action = state.stepActions[step.id];
+                          const occurrence = getOccurrenceIndex(sequence, index);
+                          const label = occurrence > 1 ? `${seat.position} (${occurrence})` : seat.position;
+                          const foldStreet = findFoldStreetBefore(seat, street);
+                          const snapshot = actionContext.get(step.id);
+                          const stackAfter = snapshot?.stackAfter;
+                          const contributionBefore = snapshot?.contribution ?? 0;
+                          const totalContribution = snapshot?.resultContribution ?? contributionBefore;
+                          const addedAmount = snapshot?.resultAdded ?? Math.max(totalContribution - contributionBefore, 0);
+                          const isHighlighted = highlight?.street === street && highlight.stepId === step.id;
+                          const canEditStep = canEditStreet;
+                          let badgeOverride: string | undefined;
+                          if (action) {
+                            if (action.action === 'bet' && addedAmount > 0) {
+                              badgeOverride = `BET (${formatBB(addedAmount)} ${BIG_BLIND_SYMBOL})`;
+                            } else if (action.action === 'open' && totalContribution > 0) {
+                              badgeOverride = `OPEN (${formatBB(totalContribution)} ${BIG_BLIND_SYMBOL})`;
+                            } else if (action.action === 'raise') {
+                              if (totalContribution > 0) {
+                                badgeOverride = `RAISE (to ${formatBB(totalContribution)} ${BIG_BLIND_SYMBOL})`;
+                              } else if (addedAmount > 0) {
+                                badgeOverride = `RAISE (${formatBB(addedAmount)} ${BIG_BLIND_SYMBOL})`;
+                              }
+                            }
+                          }
+                          const handleCellClick = () => {
+                            setHighlight((current) =>
+                              current && current.street === street && current.stepId === step.id
+                                ? null
+                                : { street, stepId: step.id },
+                            );
+                          };
+                          return (
+                            <Tr key={step.id}>
+                              <Td
+                                textAlign="center"
+                                height={ROW_HEIGHT}
+                                py={2}
+                                cursor="pointer"
+                                bg={isHighlighted ? 'purple.900' : undefined}
+                                boxShadow={isHighlighted ? 'inset 0 0 0 1px rgba(128, 90, 213, 0.6)' : undefined}
+                                onClick={handleCellClick}
+                              >
+                                <Stack spacing={1} align="center" justify="center" h="full">
+                                  <Flex justify="center" align="baseline" gap={2}>
+                                    <Text fontWeight="semibold">{label}</Text>
+                                    {action && typeof stackAfter === 'number' && !foldStreet && (
+                                      <Text fontSize="0.65rem" color="whiteAlpha.600">
+                                        ({formatBB(stackAfter)} {BIG_BLIND_SYMBOL} Behind)
+                                      </Text>
+                                    )}
+                                  </Flex>
+                                  {foldStreet ? (
+                                    <Text fontSize="xs" color="whiteAlpha.500">
+                                      Folded {foldStreet.toUpperCase()}
+                                    </Text>
+                                  ) : (
+                                    <HStack spacing={2} justify="center">
+                                      {renderActionBadge(action, badgeOverride)}
+                                      {canEditStep && (
+                                        <Button
+                                          size="xs"
+                                          variant="link"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            openEditor(step, street);
+                                          }}
+                                        >
+                                          {action ? 'Edit' : 'Edit Action'}
+                                        </Button>
+                                      )}
+                                    </HStack>
+                                  )}
+                                </Stack>
+                              </Td>
+                            </Tr>
+                          );
+                        })
+                      )}
+                    </Tbody>
+                  </Table>
+                </Box>
+              </Stack>
+            );
+          })}
+        </Flex>
+      </Stack>
+
+      <DerivedFiltersPanel
+        highlightFilters={highlightFilters}
+        disabledFilters={disabledFilters}
+        toggleFilter={toggleFilter}
+      />
 
       <SeatActionModal
         state={editorState}
@@ -976,7 +1715,7 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
         onClose={closeBoardEditor}
         onSave={handleBoardSave}
       />
-    </Stack>
+    </>
   );
 };
 
