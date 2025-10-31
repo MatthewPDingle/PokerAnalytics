@@ -1212,10 +1212,6 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
         .filter((value): value is string => Boolean(value))
         .join('') || '—';
 
-    filters.push({
-      id: `${baseId}-seat-position`,
-      label: `Seat Position: ${highlightSeat.position}`,
-    });
     const relative = deriveRelativePositionLabel(street, targetEntry, highlightSeat, seatMap);
     if (relative) {
       filters.push({
@@ -1345,6 +1341,10 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
       {
         id: 'position-players-dealt',
         label: `Players Dealt: ${initialActiveIds.length}`,
+      },
+      {
+        id: 'position-seat',
+        label: `Player Position: ${highlightSeat.position}`,
       },
     ];
 
@@ -1503,25 +1503,34 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions }: ActionMatrixCo
       setDisabledFilters(new Set());
       return;
     }
-    const availableIds = new Set<string>();
+    const defaultActive = new Set<string>();
+    const allIds: string[] = [];
+
+    const evaluateFilter = (categoryKey: string, filter: DerivedFilter) => {
+      allIds.push(filter.id);
+      if (categoryKey === 'line') {
+        defaultActive.add(filter.id);
+      } else if (filter.label.includes('3-Bet')) {
+        defaultActive.add(filter.id);
+      } else if (filter.label === 'All-In') {
+        defaultActive.add(filter.id);
+      }
+    };
+
     highlightFilters.categories.forEach((category) => {
-      category.filters.forEach((filter) => availableIds.add(filter.id));
+      category.filters.forEach((filter) => evaluateFilter(category.key, filter));
     });
     highlightFilters.boardCategories.forEach((category) => {
-      category.filters.forEach((filter) => availableIds.add(filter.id));
+      category.filters.forEach((filter) => evaluateFilter(category.key, filter));
     });
-    setDisabledFilters((previous) => {
-      let changed = false;
-      const next = new Set<string>();
-      previous.forEach((id) => {
-        if (availableIds.has(id)) {
-          next.add(id);
-        } else {
-          changed = true;
-        }
-      });
-      return changed ? next : previous;
+
+    const next = new Set<string>();
+    allIds.forEach((id) => {
+      if (!defaultActive.has(id)) {
+        next.add(id);
+      }
     });
+    setDisabledFilters(next);
   }, [highlightFilters]);
 
   const toggleFilter = useCallback((id: string) => {
