@@ -71,6 +71,50 @@ def _sample_events() -> List[Dict[str, Any]]:
             "bettor_is_hero": False,
             "responder_is_hero": False,
         },
+        {
+            "line_key": "xc_turn_b",
+            "response_type": "call",
+            "bet_type": "cbet",
+            "position": "OOP",
+            "player_count": 2,
+            "hero_position": "SB",
+            "turn_bucket_key": "pct_0_25",
+            "turn_ratio": 0.1,
+            "outcome": "call",
+            "bet_amount_bb": 1.0,
+            "hand_primary": "Second Pair",
+            "has_flush_draw": False,
+            "has_oesd_dg": False,
+            "total_added_flop_bb": 0.6,
+            "total_added_all_bb": 1.6,
+            "total_share_all": 0.8,
+            "flop_texture_keys": ["rainbow"],
+            "bettor_is_hero": False,
+            "responder_is_hero": False,
+            "is_one_bb": True,
+        },
+        {
+            "line_key": "c_turn_b",
+            "response_type": "call",
+            "bet_type": "donk",
+            "position": "IP",
+            "player_count": 3,
+            "hero_position": "BTN",
+            "turn_bucket_key": "pct_300_plus",
+            "turn_ratio": 3.2,
+            "outcome": "call",
+            "bet_amount_bb": 40.0,
+            "hand_primary": "Overpair",
+            "has_flush_draw": False,
+            "has_oesd_dg": False,
+            "total_added_flop_bb": 3.0,
+            "total_added_all_bb": 9.0,
+            "total_share_all": 3.5,
+            "flop_texture_keys": ["paired"],
+            "bettor_is_hero": False,
+            "responder_is_hero": False,
+            "is_all_in": True,
+        },
     ]
 
 
@@ -148,6 +192,22 @@ class LineQueryTests(unittest.TestCase):
         self.assertEqual(applied["texture_keys"], ["connected"])
         metrics = {row["bucket_key"]: row for row in response["response_metrics"]}
         self.assertEqual(metrics["pct_60_80"]["events"], 0)
+
+    def test_query_line_counts_special_buckets(self) -> None:
+        payload = {
+            "steps": [
+                {"street": "flop", "actor": "responder", "action": "call"},
+                {"street": "turn", "actor": "bettor", "action": "bet"},
+            ]
+        }
+
+        response = query_line(payload, events=_sample_events())
+
+        metrics = {row["bucket_key"]: row for row in response["response_metrics"]}
+        self.assertEqual(metrics["pct_0_25"]["events"], 1)
+        self.assertEqual(metrics["one_bb"]["events"], 1)
+        self.assertEqual(metrics["pct_300_plus"]["events"], 1)
+        self.assertEqual(metrics["all_in"]["events"], 1)
 
 
 if __name__ == "__main__":

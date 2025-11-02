@@ -14,7 +14,7 @@ class BucketMeta:
     label: str
 
 
-BUCKET_METADATA: Sequence[BucketMeta] = tuple(
+BUCKET_METADATA: Sequence[BucketMeta] = (BucketMeta(key="check", label="Check"),) + tuple(
     BucketMeta(key=bucket.key, label=bucket.label) for bucket in BET_SIZE_BUCKETS
 ) + (
     BucketMeta(key="pct_125_plus", label="125%+"),
@@ -42,6 +42,9 @@ def bucket_keys_for_event(event: Mapping[str, object]) -> list[str]:
 
     if base_key:
         keys.append(base_key)
+
+    if bool(event.get("is_check")):
+        keys.append("check")
 
     if bool(event.get("is_all_in")):
         keys.append("all_in")

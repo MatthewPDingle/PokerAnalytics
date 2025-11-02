@@ -13,7 +13,7 @@ from poker_analytics.data.flop_hand_categories import (
     PRIMARY_HAND_TYPES,
 )
 from poker_analytics.data.stakes import StakePolicy
-from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA
+from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, bucket_keys_for_event
 from poker_analytics.services.flop_response_matrix_builder import collect_line_events
 
 HAND_TYPE_ORDER: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES)
@@ -39,6 +39,7 @@ LINE_SUFFIX_LABELS: Mapping[str, str] = {
 
 LINE_PREFIX_ORDER: Sequence[str] = tuple(LINE_PREFIX_LABELS.keys())
 LINE_SUFFIX_ORDER: Sequence[str] = tuple(LINE_SUFFIX_LABELS.keys())
+BUCKET_KEY_SET = {meta.key for meta in BUCKET_METADATA}
 
 
 def load_line_responder_hand_matrix() -> dict:
@@ -90,14 +91,27 @@ def build_line_responder_hand_payload(events: Iterable[Mapping[str, object]]) ->
         bet_type = str(event.get("bet_type") or "")
         position = str(event.get("position") or "")
         player_count_raw = event.get("player_count")
-        bucket_key = event.get("turn_bucket_key")
         hand_primary = str(event.get("hand_primary") or "")
         has_flush_draw = bool(event.get("has_flush_draw"))
         has_oesd_dg = bool(event.get("has_oesd_dg"))
 
-        if bucket_key not in HAND_TYPE_BUCKET_KEYS:
-            continue
         if hand_primary not in HAND_TYPE_SET:
+            continue
+
+        bucket_keys = [
+            key
+            for key in bucket_keys_for_event(
+                {
+                    "bucket_key": event.get("turn_bucket_key"),
+                    "ratio": event.get("turn_ratio"),
+                    "is_check": event.get("is_check"),
+                    "is_all_in": event.get("is_all_in"),
+                    "is_one_bb": event.get("is_one_bb"),
+                }
+            )
+            if key in HAND_TYPE_BUCKET_KEYS
+        ]
+        if not bucket_keys:
             continue
 
         try:
@@ -107,13 +121,14 @@ def build_line_responder_hand_payload(events: Iterable[Mapping[str, object]]) ->
 
         scenario_key = (line_key, hero_position, bet_type, position, player_count, response_type)
         bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
-        bucket_stats = bucket_map[bucket_key]
-        bucket_stats["events"] += 1
-        bucket_stats["categories"][hand_primary] += 1
-        if has_flush_draw:
-            bucket_stats["categories"]["Flush Draw"] += 1
-        if has_oesd_dg:
-            bucket_stats["categories"]["OESD/DG"] += 1
+        for bucket_key in bucket_keys:
+            bucket_stats = bucket_map[bucket_key]
+            bucket_stats["events"] += 1
+            bucket_stats["categories"][hand_primary] += 1
+            if has_flush_draw:
+                bucket_stats["categories"]["Flush Draw"] += 1
+            if has_oesd_dg:
+                bucket_stats["categories"]["OESD/DG"] += 1
 
         line_keys.add(line_key)
         hero_positions.add(hero_position)
@@ -293,4 +308,4 @@ __all__ = [
     "load_line_responder_hand_matrix",
     "build_line_responder_hand_payload",
 ]
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3

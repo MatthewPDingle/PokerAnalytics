@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from poker_analytics.config import build_data_paths
-from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, BUCKET_KEYS
+from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, BUCKET_KEYS, bucket_keys_for_event
 from poker_analytics.data.stakes import StakePolicy
 from poker_analytics.services.flop_response_matrix_builder import collect_line_events
 
@@ -36,6 +36,7 @@ RESPONSE_TYPE_LABELS: Mapping[str, str] = {
 
 BET_TYPE_ORDER: Sequence[str] = ("cbet", "donk", "stab")
 POSITION_ORDER: Sequence[str] = ("IP", "OOP")
+BUCKET_KEY_SET = set(BUCKET_KEYS)
 
 
 def load_line_explorer() -> dict:
@@ -99,13 +100,10 @@ def build_line_explorer_payload(events: Sequence[Mapping[str, object]]) -> dict:
         position = str(event.get("position") or "")
         response_type = str(event.get("response_type") or "")
         player_count_raw = event.get("player_count")
-        bucket_key = event.get("turn_bucket_key")
+        turn_bucket_key = event.get("turn_bucket_key")
         ratio_value_raw = event.get("turn_ratio")
         bet_amount_bb_raw = event.get("bet_amount_bb")
         outcome = str(event.get("outcome") or "fold")
-
-        if bucket_key not in BUCKET_KEYS:
-            continue
 
         try:
             player_count = int(player_count_raw)
@@ -122,19 +120,37 @@ def build_line_explorer_payload(events: Sequence[Mapping[str, object]]) -> dict:
         except (TypeError, ValueError):
             bet_amount_bb = 0.0
 
+        bucket_keys = [
+            key
+            for key in bucket_keys_for_event(
+                {
+                    "bucket_key": turn_bucket_key,
+                    "ratio": ratio_value,
+                    "is_check": event.get("is_check"),
+                    "is_all_in": event.get("is_all_in"),
+                    "is_one_bb": event.get("is_one_bb"),
+                }
+            )
+            if key in BUCKET_KEY_SET
+        ]
+        if not bucket_keys:
+            continue
+
         scenario_key = (line_key, hero_position, bet_type, position, player_count, response_type)
         bucket_map = aggregate[scenario_key]
-        bucket_metrics = bucket_map[bucket_key]
 
-        bucket_metrics["events"] += 1
-        if outcome == "raise":
-            bucket_metrics["raise_events"] += 1
-        elif outcome == "call":
-            bucket_metrics["call_events"] += 1
-        else:
-            bucket_metrics["fold_events"] += 1
-        bucket_metrics["ratio_sum"] += ratio_value
-        bucket_metrics["bet_sum_bb"] += bet_amount_bb
+        for bucket_key in bucket_keys:
+            bucket_metrics = bucket_map[bucket_key]
+            bucket_metrics["events"] += 1
+            if bucket_key != "check":
+                if outcome == "raise":
+                    bucket_metrics["raise_events"] += 1
+                elif outcome == "call":
+                    bucket_metrics["call_events"] += 1
+                else:
+                    bucket_metrics["fold_events"] += 1
+                bucket_metrics["ratio_sum"] += ratio_value
+                bucket_metrics["bet_sum_bb"] += bet_amount_bb
 
         line_keys.add(line_key)
         hero_positions.add(hero_position)
@@ -285,4 +301,4 @@ def _response_type_rank(value: str) -> int:
 
 
 __all__ = ["load_line_explorer", "build_line_explorer_payload"]
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3

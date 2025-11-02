@@ -42,11 +42,43 @@ LINE_SUFFIX_MAP = {
 }
 
 
+def _deduct_stack(player_stacks: dict[str, float], player: str | None, amount: float) -> None:
+    if not player or amount <= 0:
+        return
+    current = player_stacks.get(player, 0.0)
+    next_value = current - amount
+    player_stacks[player] = next_value if next_value > 0 else 0.0
+
+
+def _effective_stack_bucket(value_bb: float) -> str:
+    if value_bb < 50:
+        return "0-50 BB"
+    if value_bb < 100:
+        return "50-100 BB"
+    return "100+ BB"
+
+
+def _spr_bucket(value: Optional[float]) -> Optional[str]:
+    if value is None:
+        return None
+    if value < 1:
+        return "0-1"
+    if value < 2:
+        return "1-2"
+    if value < 3:
+        return "2-3"
+    if value < 4:
+        return "3-4"
+    return "4+"
+
+
 @dataclass(frozen=True)
 class PlayerInfo:
     name: str
     seat: int
     is_button: bool
+    balance: float = 0.0
+    balance: float = 0.0
 
 
 def collect_flop_bet_events(
@@ -339,7 +371,12 @@ def _parse_players(root: ET.Element) -> list[PlayerInfo]:
         except ValueError:
             continue
         is_button = player_elem.attrib.get("dealer") == "1"
-        players.append(PlayerInfo(name=name, seat=seat, is_button=is_button))
+        balance_text = player_elem.attrib.get("balance") or player_elem.attrib.get("chips")
+        try:
+            balance = float(balance_text) if balance_text is not None else 0.0
+        except ValueError:
+            balance = 0.0
+        players.append(PlayerInfo(name=name, seat=seat, is_button=is_button, balance=balance))
     return players
 
 
@@ -379,6 +416,25 @@ def _position_labels(players: Sequence[PlayerInfo]) -> Dict[str, str]:
         label = canonical[idx] if idx < len(canonical) else f"P{idx}"
         labels[player.name] = label
     return labels
+
+
+def _relative_position_label(
+    player: str,
+    active_players: Iterable[str],
+    position_index: Mapping[str, int],
+) -> str:
+    ordered = [
+        name
+        for name in sorted(active_players, key=lambda n: position_index.get(n, float("inf")))
+        if name in position_index
+    ]
+    if not ordered or player not in ordered:
+        return "unknown"
+    if player == ordered[0]:
+        return "early"
+    if player == ordered[-1]:
+        return "late"
+    return "middle"
 
 
 def _safe_amount(action_elem: ET.Element) -> float:
@@ -491,8 +547,11 @@ def _line_events_from_hand_history(
 
     active_players = {player.name for player in players}
     player_states: Dict[str, dict[str, object]] = {name: {"checked": False} for name in active_players}
+    player_stacks: Dict[str, float] = {player.name: player.balance for player in players}
 
     total_pot = 0.0
+    preflop_raise_count = 0
+    players_dealt = len(players)
     preflop_aggressor: Optional[str] = None
     flop_player_count: Optional[int] = None
     flop_active_snapshot: Optional[set[str]] = None
@@ -512,10 +571,13 @@ def _line_events_from_hand_history(
                 if not player or not action_type:
                     continue
                 amount = _safe_amount(action_elem)
+                _deduct_stack(player_stacks, player, amount)
                 if amount > 0:
                     total_pot += amount
                 if action_type in FOLD_TYPES:
                     active_players.discard(player)
+                if action_type in BET_TYPES | RAISE_TYPES | ALL_IN_TYPES:
+                    preflop_raise_count += 1
                 elif action_type not in CHECK_TYPES:
                     active_players.add(player)
                 if action_type in RAISE_TYPES and amount > 0:
@@ -536,6 +598,7 @@ def _line_events_from_hand_history(
 
                 state = player_states.setdefault(player, {"checked": False})
                 amount = _safe_amount(action_elem)
+                _deduct_stack(player_stacks, player, amount)
                 pot_before = total_pot
 
                 if action_type in CHECK_TYPES:
@@ -629,6 +692,7 @@ def _line_events_from_hand_history(
 
                 amount = _safe_amount(action_elem)
                 pot_before = total_pot
+                _deduct_stack(player_stacks, player, amount)
 
                 if player not in turn_actions:
                     if action_type in BET_TYPES:
@@ -649,6 +713,7 @@ def _line_events_from_hand_history(
                             "amount": amount,
                             "pot_before": pot_before,
                             "sub_actions": actions[idx + 1 :],
+                            "is_all_in": action_type in ALL_IN_TYPES,
                         }
 
                 if amount > 0:
@@ -661,7 +726,7 @@ def _line_events_from_hand_history(
                 if not action_info:
                     continue
                 suffix = LINE_SUFFIX_MAP.get(action_info["code"])
-                if suffix != "b":
+                if suffix not in {"b", "x"}:
                     continue
                 computed_line_key = f"{info['prefix']}_turn_{suffix}"
                 if line_key and computed_line_key != line_key:
@@ -669,10 +734,33 @@ def _line_events_from_hand_history(
                 pot_before_turn = action_info["pot_before"]
                 amount = action_info["amount"]
                 ratio = (amount / pot_before_turn) if pot_before_turn > 0 else 0.0
-                bucket = bucket_for_ratio(ratio)
-                if bucket is None:
+                bucket = bucket_for_ratio(ratio) if suffix == "b" else None
+                if suffix == "b" and bucket is None:
                     continue
-                outcome = _resolve_bet_outcome(action_info["sub_actions"], player)
+                outcome = _resolve_bet_outcome(action_info["sub_actions"], player) if suffix == "b" else "check"
+                turn_active_players = set(active_players)
+                relative_position = _relative_position_label(
+                    player,
+                    turn_active_players,
+                    position_index,
+                )
+                pot_before_turn_bb = (pot_before_turn / big_blind) if big_blind else 0.0
+                player_stack_after = max(player_stacks.get(player, 0.0), 0.0)
+                opponent_stacks = [max(player_stacks.get(name, 0.0), 0.0) for name in turn_active_players if name != player]
+                if opponent_stacks:
+                    effective_stack = min([player_stack_after, *opponent_stacks])
+                else:
+                    effective_stack = player_stack_after
+                effective_stack_bb = (effective_stack / big_blind) if big_blind else 0.0
+                spr_value: Optional[float] = None
+                spr_bucket = None
+                if pot_before_turn_bb > 0:
+                    spr_value = effective_stack_bb / pot_before_turn_bb if pot_before_turn_bb > 0 else None
+                    spr_bucket = _spr_bucket(spr_value)
+                effective_stack_bucket = _effective_stack_bucket(effective_stack_bb)
+                tolerance = max(1e-6, big_blind * 1e-4) if big_blind else 1e-6
+                is_one_bb = suffix == "b" and math.isfinite(big_blind) and abs(amount - big_blind) <= tolerance
+                is_all_in = suffix == "b" and (bool(action_info.get("is_all_in")) or player_stack_after <= tolerance)
                 event_record = {
                     "line_key": computed_line_key,
                     "response_type": info["response_type"],
@@ -680,24 +768,38 @@ def _line_events_from_hand_history(
                     "bet_type": info.get("bet_type"),
                     "position": "IP" if info.get("in_position") else "OOP",
                     "player_count": info.get("player_count") or len(active_players),
-                    "turn_bucket_key": bucket.key,
-                    "turn_ratio": ratio,
+                    "turn_bucket_key": "check" if suffix == "x" else bucket.key,
+                    "bucket_key": "check" if suffix == "x" else bucket.key,
+                    "turn_ratio": 0.0 if suffix == "x" else ratio,
                     "outcome": outcome,
                     "hand_primary": info.get("hand_primary"),
                     "has_flush_draw": info.get("has_flush_draw"),
                     "has_oesd_dg": info.get("has_oesd_dg"),
                     "hole_cards": info.get("hole_cards"),
-                    "pot_before_turn_bb": pot_before_turn / big_blind,
-                    "bet_amount_bb": amount / big_blind,
+                    "pot_before_turn_bb": pot_before_turn_bb,
+                    "bet_amount_bb": 0.0 if suffix == "x" else amount / big_blind,
                     "flop_texture_keys": info.get("flop_texture_keys") or texture_keys(flop_cards_text),
                     "bettor_is_hero": False,
                     "responder_is_hero": bool(info.get("responder_is_hero")),
+                    "players_dealt": players_dealt,
+                    "players_remaining": len(turn_active_players),
+                    "relative_position": relative_position,
+                    "preflop_aggression_level": preflop_raise_count,
+                    "all_in_called": bool(bucket and bucket.key == "all_in" and outcome in {"call", "raise"}) if suffix == "b" else False,
+                    "effective_stack_bb": effective_stack_bb,
+                    "effective_stack_bucket": effective_stack_bucket,
+                    "spr": spr_value,
+                    "spr_bucket": spr_bucket,
+                    "is_check": suffix == "x",
+                    "is_one_bb": is_one_bb,
+                    "is_all_in": is_all_in,
                 }
                 events.append(event_record)
 
         else:
             for action_elem in actions:
                 amount = _safe_amount(action_elem)
+                _deduct_stack(player_stacks, action_elem.attrib.get("player"), amount)
                 if amount > 0:
                     total_pot += amount
 

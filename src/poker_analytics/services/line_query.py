@@ -12,11 +12,11 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 from poker_analytics.config import build_data_paths
 from poker_analytics.data.flop_hand_categories import DRAW_CATEGORIES, PRIMARY_HAND_TYPES
 from poker_analytics.data.stakes import StakePolicy
-from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA
+from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, bucket_keys_for_event
 from poker_analytics.services.flop_response_matrix_builder import collect_line_events
 from poker_analytics.services.line_descriptor import descriptor_fingerprint, parse_line_descriptor
 
-CURRENT_VERSION = 2
+CURRENT_VERSION = 4
 
 HAND_TYPE_KEYS: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES)
 HAND_TYPE_SET = set(HAND_TYPE_KEYS)
@@ -27,6 +27,29 @@ BET_ACTION_TO_TYPE = {
     "lead": "stab",
     "probe": "stab",
 }
+
+REQUEST_BUCKET_EXPANSIONS: dict[str, set[str]] = {
+    "pct_100_plus": {
+        "pct_100_125",
+        "pct_125_200",
+        "pct_200_300",
+        "pct_300_plus",
+        "pct_125_plus",
+    }
+}
+
+BUCKET_KEY_SET = {meta.key for meta in BUCKET_METADATA}
+
+
+def _event_bucket_keys(event: Mapping[str, object]) -> list[str]:
+    payload = {
+        "bucket_key": event.get("turn_bucket_key") or event.get("bucket_key"),
+        "ratio": event.get("turn_ratio"),
+        "is_check": event.get("is_check"),
+        "is_all_in": event.get("is_all_in"),
+        "is_one_bb": event.get("is_one_bb"),
+    }
+    return [key for key in bucket_keys_for_event(payload) if key in BUCKET_KEY_SET]
 
 
 @dataclass
@@ -41,6 +64,16 @@ class CompiledFilters:
     ratio_max: Optional[float] = None
     exclude_hero: bool = False
     texture_keys: Optional[set[str]] = None
+    players_dealt: Optional[set[int]] = None
+    player_counts: Optional[set[int]] = None
+    players_remaining: Optional[set[int]] = None
+    hero_positions: Optional[set[str]] = None
+    relative_positions: Optional[set[str]] = None
+    line_keys: Optional[set[str]] = None
+    min_preflop_raises: Optional[int] = None
+    require_all_in_called: bool = False
+    effective_stack_buckets: Optional[set[str]] = None
+    spr_buckets: Optional[set[str]] = None
 
 
 def query_line(
@@ -98,6 +131,14 @@ def _compile_filters(descriptor, request_filters: Optional[Mapping[str, Any]] = 
         positions=set(),
         bucket_keys=set(),
         texture_keys=set(),
+        players_dealt=set(),
+        player_counts=set(),
+        players_remaining=set(),
+        hero_positions=set(),
+        relative_positions=set(),
+        line_keys=set(),
+        effective_stack_buckets=set(),
+        spr_buckets=set(),
     )
 
     for step in descriptor.steps:
@@ -141,11 +182,146 @@ def _compile_filters(descriptor, request_filters: Optional[Mapping[str, Any]] = 
             filters.require_multiway = True
 
     if request_filters:
+        def _as_iterable(value):
+            if isinstance(value, (list, tuple, set)):
+                return value
+            return [value]
+
         exclude = request_filters.get("excludeHero")
         if exclude is None:
             exclude = request_filters.get("exclude_hero")
         if exclude is not None:
             filters.exclude_hero = bool(exclude)
+
+        bucket_keys = request_filters.get("bucket_keys") or request_filters.get("bucketKeys")
+        if bucket_keys is not None:
+            if isinstance(bucket_keys, (list, tuple, set)):
+                incoming = {str(key) for key in bucket_keys}
+            else:
+                incoming = {str(bucket_keys)}
+
+            expanded: set[str] = set()
+            for key in incoming:
+                expanded_keys = REQUEST_BUCKET_EXPANSIONS.get(key)
+                if expanded_keys:
+                    expanded.update(expanded_keys)
+                else:
+                    expanded.add(key)
+
+            filters.bucket_keys = expanded or None
+
+        texture_keys = request_filters.get("texture_keys") or request_filters.get("textureKeys")
+        if texture_keys is not None and filters.texture_keys is not None:
+            for value in _as_iterable(texture_keys):
+                text = str(value).strip().lower()
+                if text:
+                    filters.texture_keys.add(text)
+
+        players_dealt_values = request_filters.get("players_dealt") or request_filters.get("playersDealt")
+        if players_dealt_values is not None and filters.players_dealt is not None:
+            for value in _as_iterable(players_dealt_values):
+                try:
+                    filters.players_dealt.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+
+        player_counts_values = request_filters.get("player_counts") or request_filters.get("playerCounts")
+        if player_counts_values is not None and filters.player_counts is not None:
+            for value in _as_iterable(player_counts_values):
+                try:
+                    filters.player_counts.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+
+        players_remaining_values = request_filters.get("players_remaining") or request_filters.get("playersRemaining")
+        if players_remaining_values is not None and filters.players_remaining is not None:
+            for value in _as_iterable(players_remaining_values):
+                try:
+                    filters.players_remaining.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+
+        hero_positions_values = request_filters.get("hero_positions") or request_filters.get("heroPositions")
+        if hero_positions_values is not None and filters.hero_positions is not None:
+            for value in _as_iterable(hero_positions_values):
+                text = str(value).strip().upper()
+                if text:
+                    filters.hero_positions.add(text)
+
+        relative_positions_values = request_filters.get("relative_positions") or request_filters.get("relativePositions")
+        if relative_positions_values is not None and filters.relative_positions is not None:
+            for value in _as_iterable(relative_positions_values):
+                text = str(value).strip().lower()
+                if text:
+                    filters.relative_positions.add(text)
+
+        eff_stack_values = request_filters.get("effective_stack_buckets") or request_filters.get("effectiveStackBuckets")
+        if eff_stack_values is not None and filters.effective_stack_buckets is not None:
+            for value in _as_iterable(eff_stack_values):
+                text = str(value).strip()
+                if text:
+                    filters.effective_stack_buckets.add(text)
+
+        spr_values = request_filters.get("spr_buckets") or request_filters.get("sprBuckets")
+        if spr_values is not None and filters.spr_buckets is not None:
+            for value in _as_iterable(spr_values):
+                text = str(value).strip()
+                if text:
+                    filters.spr_buckets.add(text)
+
+        ratio_min_value = request_filters.get("ratio_min")
+        if ratio_min_value is None:
+            ratio_min_value = request_filters.get("ratioMin")
+        if ratio_min_value is not None:
+            try:
+                candidate = float(ratio_min_value)
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None:
+                filters.ratio_min = (
+                    max(filters.ratio_min, candidate) if filters.ratio_min is not None else candidate
+                )
+
+        ratio_max_value = request_filters.get("ratio_max")
+        if ratio_max_value is None:
+            ratio_max_value = request_filters.get("ratioMax")
+        if ratio_max_value is not None:
+            try:
+                candidate = float(ratio_max_value)
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None:
+                filters.ratio_max = (
+                    min(filters.ratio_max, candidate) if filters.ratio_max is not None else candidate
+                )
+
+        min_raises_value = request_filters.get("min_preflop_raises")
+        if min_raises_value is None:
+            min_raises_value = request_filters.get("minPreflopRaises")
+        if min_raises_value is not None:
+            try:
+                candidate = int(min_raises_value)
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None:
+                filters.min_preflop_raises = (
+                    max(filters.min_preflop_raises, candidate)
+                    if filters.min_preflop_raises is not None
+                    else candidate
+                )
+
+        all_in_called_value = request_filters.get("all_in_called")
+        if all_in_called_value is None:
+            all_in_called_value = request_filters.get("allInCalled")
+        if all_in_called_value is not None:
+            filters.require_all_in_called = bool(all_in_called_value)
+
+        line_keys_values = request_filters.get("line_keys") or request_filters.get("lineKeys")
+        if line_keys_values is not None and filters.line_keys is not None:
+            for value in _as_iterable(line_keys_values):
+                text = str(value).strip().lower()
+                if text:
+                    filters.line_keys.add(text)
 
     if not filters.response_types:
         filters.response_types = None
@@ -157,6 +333,22 @@ def _compile_filters(descriptor, request_filters: Optional[Mapping[str, Any]] = 
         filters.bucket_keys = None
     if not filters.texture_keys:
         filters.texture_keys = None
+    if not filters.players_dealt:
+        filters.players_dealt = None
+    if not filters.player_counts:
+        filters.player_counts = None
+    if not filters.players_remaining:
+        filters.players_remaining = None
+    if not filters.hero_positions:
+        filters.hero_positions = None
+    if not filters.relative_positions:
+        filters.relative_positions = None
+    if not filters.line_keys:
+        filters.line_keys = None
+    if not filters.effective_stack_buckets:
+        filters.effective_stack_buckets = None
+    if not filters.spr_buckets:
+        filters.spr_buckets = None
 
     return filters
 
@@ -172,11 +364,36 @@ def _matches_filters(event: Mapping[str, object], filters: CompiledFilters) -> b
     except (TypeError, ValueError):
         player_count = None
 
-    bucket_key = event.get("turn_bucket_key")
+    bucket_keys = _event_bucket_keys(event)
     try:
         ratio_value = float(event.get("turn_ratio") or 0.0)
     except (TypeError, ValueError):
         ratio_value = 0.0
+
+    players_dealt_raw = event.get("players_dealt")
+    try:
+        players_dealt = int(players_dealt_raw)
+    except (TypeError, ValueError):
+        players_dealt = None
+
+    players_remaining_raw = event.get("players_remaining")
+    try:
+        players_remaining = int(players_remaining_raw)
+    except (TypeError, ValueError):
+        players_remaining = None
+
+    hero_position = str(event.get("hero_position") or "").upper()
+    relative_position = str(event.get("relative_position") or "").lower()
+    line_key = str(event.get("line_key") or "").lower()
+    effective_stack_bucket = str(event.get("effective_stack_bucket") or "")
+    spr_bucket = str(event.get("spr_bucket") or "")
+
+    try:
+        preflop_aggression = int(event.get("preflop_aggression_level") or 0)
+    except (TypeError, ValueError):
+        preflop_aggression = 0
+
+    all_in_called = bool(event.get("all_in_called"))
 
     if filters.response_types and response_type not in filters.response_types:
         return False
@@ -188,11 +405,25 @@ def _matches_filters(event: Mapping[str, object], filters: CompiledFilters) -> b
         return False
     if filters.require_multiway and (player_count is None or player_count <= 2):
         return False
-    if filters.bucket_keys and bucket_key not in filters.bucket_keys:
+    if filters.player_counts and (player_count is None or player_count not in filters.player_counts):
+        return False
+    if filters.bucket_keys and (not bucket_keys or filters.bucket_keys.isdisjoint(bucket_keys)):
         return False
     if filters.ratio_min is not None and ratio_value < filters.ratio_min:
         return False
     if filters.ratio_max is not None and ratio_value > filters.ratio_max:
+        return False
+    if filters.players_dealt and (players_dealt is None or players_dealt not in filters.players_dealt):
+        return False
+    if filters.players_remaining and (players_remaining is None or players_remaining not in filters.players_remaining):
+        return False
+    if filters.hero_positions and hero_position not in filters.hero_positions:
+        return False
+    if filters.relative_positions and relative_position not in filters.relative_positions:
+        return False
+    if filters.effective_stack_buckets and effective_stack_bucket not in filters.effective_stack_buckets:
+        return False
+    if filters.spr_buckets and spr_bucket not in filters.spr_buckets:
         return False
     if filters.exclude_hero:
         if bool(event.get("bettor_is_hero")) or bool(event.get("responder_is_hero")):
@@ -210,6 +441,12 @@ def _matches_filters(event: Mapping[str, object], filters: CompiledFilters) -> b
             texture_set = set()
         if not texture_set or texture_set.isdisjoint(filters.texture_keys):
             return False
+    if filters.line_keys and (not line_key or line_key not in filters.line_keys):
+        return False
+    if filters.min_preflop_raises is not None and preflop_aggression < filters.min_preflop_raises:
+        return False
+    if filters.require_all_in_called and not all_in_called:
+        return False
 
     return True
 
@@ -244,74 +481,97 @@ def _build_payload(
         "bet_types": Counter(),
         "positions": Counter(),
         "player_counts": Counter(),
+        "players_dealt": Counter(),
+        "players_remaining": Counter(),
         "hero_positions": Counter(),
+        "relative_positions": Counter(),
+        "all_in_called": Counter(),
+        "effective_stack_buckets": Counter(),
+        "spr_buckets": Counter(),
         "response_types": Counter(),
     }
 
+    total_events = 0
+
     for event in events:
-        bucket_key = event.get("turn_bucket_key")
-        if bucket_key not in bucket_stats:
+        bucket_keys = _event_bucket_keys(event)
+        if not bucket_keys:
             continue
 
-        stats = bucket_stats[bucket_key]
-        stats["events"] += 1
-
         outcome = str(event.get("outcome") or "").lower()
-        if outcome == "raise":
-            stats["raise"] += 1
-        elif outcome == "call":
-            stats["call"] += 1
-        else:
-            stats["fold"] += 1
-
         try:
             ratio_value = float(event.get("turn_ratio") or 0.0)
         except (TypeError, ValueError):
             ratio_value = 0.0
-        stats["ratio_sum"] += ratio_value
 
         try:
             bet_amount = float(event.get("bet_amount_bb") or 0.0)
         except (TypeError, ValueError):
             bet_amount = 0.0
-        stats["bet_sum"] += bet_amount
 
         try:
             added_flop = float(event.get("total_added_flop_bb") or 0.0)
         except (TypeError, ValueError):
             added_flop = 0.0
-        stats["added_flop_sum"] += added_flop
 
         try:
             added_all = float(event.get("total_added_all_bb") or 0.0)
         except (TypeError, ValueError):
             added_all = 0.0
-        stats["added_all_sum"] += added_all
 
         try:
             share_all = float(event.get("total_share_all") or 0.0)
         except (TypeError, ValueError):
             share_all = 0.0
-        stats["share_all_sum"] += share_all
 
         hand_primary = str(event.get("hand_primary") or "")
-        if hand_primary in HAND_TYPE_SET:
-            stats["hand_categories"][hand_primary] += 1
-        if event.get("has_flush_draw"):
-            stats["hand_categories"]["Flush Draw"] += 1
-        if event.get("has_oesd_dg"):
-            stats["hand_categories"]["OESD/DG"] += 1
+
+        for bucket_key in bucket_keys:
+            stats = bucket_stats[bucket_key]
+            stats["events"] += 1
+
+            if bucket_key != "check":
+                if outcome == "raise":
+                    stats["raise"] += 1
+                elif outcome == "call":
+                    stats["call"] += 1
+                else:
+                    stats["fold"] += 1
+                stats["ratio_sum"] += ratio_value
+                stats["bet_sum"] += bet_amount
+
+            stats["added_flop_sum"] += added_flop
+            stats["added_all_sum"] += added_all
+            stats["share_all_sum"] += share_all
+
+            if hand_primary in HAND_TYPE_SET:
+                stats["hand_categories"][hand_primary] += 1
+            if event.get("has_flush_draw"):
+                stats["hand_categories"]["Flush Draw"] += 1
+            if event.get("has_oesd_dg"):
+                stats["hand_categories"]["OESD/DG"] += 1
+
+        total_events += 1
 
         context_counters["line_keys"][str(event.get("line_key") or "")] += 1
         context_counters["bet_types"][str(event.get("bet_type") or "")] += 1
         context_counters["positions"][str(event.get("position") or "")] += 1
         context_counters["player_counts"][str(event.get("player_count") or "")] += 1
+        context_counters["players_dealt"][str(event.get("players_dealt") or "")] += 1
+        context_counters["players_remaining"][str(event.get("players_remaining") or "")] += 1
         context_counters["hero_positions"][str(event.get("hero_position") or "")] += 1
+        context_counters["relative_positions"][str(event.get("relative_position") or "")] += 1
+        context_counters["all_in_called"]["yes" if event.get("all_in_called") else "no"] += 1
+        eff_bucket_key = str(event.get("effective_stack_bucket") or "")
+        if eff_bucket_key:
+            context_counters["effective_stack_buckets"][eff_bucket_key] += 1
+        spr_bucket_key = str(event.get("spr_bucket") or "")
+        if spr_bucket_key:
+            context_counters["spr_buckets"][spr_bucket_key] += 1
         context_counters["response_types"][str(event.get("response_type") or "")] += 1
 
     response_rows = []
     hand_rows = []
-    total_events = sum(stats["events"] for stats in bucket_stats.values())
 
     for meta in BUCKET_METADATA:
         stats = bucket_stats[meta.key]
@@ -406,13 +666,33 @@ def _filters_metadata(filters: CompiledFilters) -> dict:
         data["bucket_keys"] = sorted(filters.bucket_keys)
     if filters.texture_keys:
         data["texture_keys"] = sorted(filters.texture_keys)
+    if filters.players_dealt:
+        data["players_dealt"] = sorted(filters.players_dealt)
+    if filters.player_counts:
+        data["player_counts"] = sorted(filters.player_counts)
+    if filters.players_remaining:
+        data["players_remaining"] = sorted(filters.players_remaining)
+    if filters.hero_positions:
+        data["hero_positions"] = sorted(filters.hero_positions)
+    if filters.relative_positions:
+        data["relative_positions"] = sorted(filters.relative_positions)
+    if filters.effective_stack_buckets:
+        data["effective_stack_buckets"] = sorted(filters.effective_stack_buckets)
+    if filters.spr_buckets:
+        data["spr_buckets"] = sorted(filters.spr_buckets)
     if filters.ratio_min is not None or filters.ratio_max is not None:
         data["ratio_range"] = {
             "min": filters.ratio_min,
             "max": filters.ratio_max,
         }
+    if filters.line_keys:
+        data["line_keys"] = sorted(filters.line_keys)
+    if filters.min_preflop_raises is not None:
+        data["min_preflop_raises"] = filters.min_preflop_raises
     if filters.exclude_hero:
         data["exclude_hero"] = True
+    if filters.require_all_in_called:
+        data["all_in_called"] = True
     return data
 
 
