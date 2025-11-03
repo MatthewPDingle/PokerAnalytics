@@ -1,9 +1,11 @@
 import {
   Alert,
   AlertIcon,
+  Badge,
   Box,
   Divider,
   Flex,
+  HStack,
   Heading,
   Spinner,
   Stack,
@@ -22,7 +24,7 @@ import {
 import { useMemo, useReducer, useState } from 'react';
 
 import ActionMatrixComposer, { BucketOption, HighlightContextSummary } from '../components/ActionMatrixComposer';
-import useLineQuery, { LineBucketMeta, LineResponseMetric, LineHandMetric } from '../hooks/useLineQuery';
+import useLineQuery, { LineActionSummary, LineBucketMeta, LineResponderSeatSummary } from '../hooks/useLineQuery';
 import {
   createInitialTableComposerState,
   deriveDescriptorFromTable,
@@ -63,7 +65,38 @@ const LEGACY_BUCKET_KEY_MAP: Record<string, string> = {
   one_bb: 'one_bb',
 };
 
-const NORMALIZED_BUCKET_KEY_SET = new Set(NORMALIZED_BUCKETS.map((bucket) => bucket.key));
+const normalizeBucketKey = (key: string | null | undefined): string | null => {
+  if (!key) {
+    return null;
+  }
+  return LEGACY_BUCKET_KEY_MAP[key] ?? key;
+};
+
+const NORMALIZED_BUCKET_LABEL_LOOKUP = new Map<string, string>(
+  NORMALIZED_BUCKETS.map((bucket) => [bucket.key, bucket.label] as const),
+);
+
+const normalizeBucketOrder = (input: LineBucketMeta[]): LineBucketMeta[] => {
+  const normalized: LineBucketMeta[] = [];
+  const seen = new Set<string>();
+
+  NORMALIZED_BUCKETS.forEach((bucket) => {
+    normalized.push({ ...bucket });
+    seen.add(bucket.key);
+  });
+
+  input.forEach((bucket) => {
+    const normalizedKey = normalizeBucketKey(bucket.key);
+    if (!normalizedKey || seen.has(normalizedKey)) {
+      return;
+    }
+    seen.add(normalizedKey);
+    const label = NORMALIZED_BUCKET_LABEL_LOOKUP.get(normalizedKey) ?? bucket.label;
+    normalized.push({ key: normalizedKey, label });
+  });
+
+  return normalized;
+};
 
 const NORMALIZED_TO_SOURCE_KEYS: Record<string, string[]> = {
   check: ['check'],
@@ -72,12 +105,14 @@ const NORMALIZED_TO_SOURCE_KEYS: Record<string, string[]> = {
   pct_40_60: ['pct_40_60'],
   pct_60_80: ['pct_60_80'],
   pct_80_100: ['pct_80_100'],
-  pct_100_plus: ['pct_100_125', 'pct_125_200', 'pct_200_300', 'pct_300_plus', 'pct_125_plus', 'pct_125_150', 'pct_150_200', 'pct_300_400'],
+  pct_100_plus: ['pct_100_plus', 'pct_125_plus', 'pct_100_125', 'pct_125_200', 'pct_200_300', 'pct_300_plus', 'pct_125_150', 'pct_150_200', 'pct_300_400'],
   one_bb: ['one_bb'],
   all_in: ['all_in'],
 };
 
-type HandDefinition = { key: string; label: string; members: string[] };
+const RESPONDER_ACTION_KEYS = ['check', 'bet', 'call', 'raise', 'fold'] as const;
+
+ type HandDefinition = { key: string; label: string; members: string[] };
 
 const HAND_TYPE_DEFINITIONS: HandDefinition[] = [
   { key: 'air', label: 'Air', members: ['Air'] },
@@ -94,6 +129,7 @@ const HAND_TYPE_DEFINITIONS: HandDefinition[] = [
   { key: 'quads', label: 'Quads', members: ['Quads'] },
   { key: 'flush_draw', label: 'Flush Draw', members: ['Flush Draw'] },
   { key: 'oesd_dg', label: 'OESD/DG', members: ['OESD/DG'] },
+  { key: 'unknown', label: 'Unknown', members: ['Unknown'] },
 ];
 
 const HAND_GROUP_DEFINITIONS: HandDefinition[] = [
@@ -105,6 +141,7 @@ const HAND_GROUP_DEFINITIONS: HandDefinition[] = [
   { key: 'trips_set', label: 'Trips/Set', members: ['Trips/Set'] },
   { key: 'monster', label: 'Monster', members: ['Straight', 'Flush', 'Full House', 'Quads'] },
   { key: 'draw', label: 'Draw', members: ['Flush Draw', 'OESD/DG'] },
+  { key: 'unknown', label: 'Unknown', members: ['Unknown'] },
 ];
 
 const TABLE_SIZE_OPTIONS = Array.from({ length: 9 }, (_, index) => index + 2);
@@ -117,7 +154,6 @@ const POT_ODDS_BUCKET_RANGES: Record<string, { min: number; max?: number }> = {
   '80-100%': { min: 0.8, max: 1.0 },
   '100%+': { min: 1.0 },
 };
-
 const TEXTURE_LABEL_TO_KEY: Record<string, string> = {
   Rainbow: 'rainbow',
   Monotone: 'monotone',
@@ -129,27 +165,42 @@ const TEXTURE_LABEL_TO_KEY: Record<string, string> = {
   'High Broadway': 'high_broadway',
 };
 
-type DerivedRequestFilters = {
-  bucketKeys?: string[];
-  textureKeys?: string[];
-  playersDealt?: number[];
-  playerCounts?: number[];
-  playersRemaining?: number[];
-  heroPositions?: string[];
-  relativePositions?: string[];
-  ratioMin?: number | null;
-  ratioMax?: number | null;
-  minPreflopRaises?: number | null;
-  allInCalled?: boolean;
-  lineKeys?: string[];
-  effectiveStackBuckets?: string[];
-  sprBuckets?: string[];
+const BUCKET_LABEL_TO_KEY: Record<string, string> = {
+  Check: 'check',
+  '0-25%': 'pct_0_25',
+  '0-25% Pot': 'pct_0_25',
+  '25-40%': 'pct_25_40',
+  '25-40% Pot': 'pct_25_40',
+  '40-60%': 'pct_40_60',
+  '40-60% Pot': 'pct_40_60',
+  '60-80%': 'pct_60_80',
+  '60-80% Pot': 'pct_60_80',
+  '80-100%': 'pct_80_100',
+  '80-100% Pot': 'pct_80_100',
+  '100%+': 'pct_100_plus',
+  '100%+ Pot': 'pct_100_plus',
+  '100-125%': 'pct_100_plus',
+  '100-125% Pot': 'pct_100_plus',
+  '125-200%': 'pct_100_plus',
+  '125-200% Pot': 'pct_100_plus',
+  '200-300%': 'pct_100_plus',
+  '200-300% Pot': 'pct_100_plus',
+  '300%+': 'pct_100_plus',
+  '300%+ Pot': 'pct_100_plus',
+  '125%+': 'pct_100_plus',
+  '125%+ Pot': 'pct_100_plus',
 };
 
-type DerivedFilterParseResult = {
-  filters: DerivedRequestFilters;
-  highlightedColumns: Set<string>;
-};
+const NORMALIZED_BUCKET_KEY_SET = new Set(NORMALIZED_BUCKETS.map((bucket) => bucket.key));
+
+const POT_ODDS_DISPLAY = {
+  preflop: 'Preflop',
+  flop: 'Flop',
+  turn: 'Turn',
+  river: 'River',
+} as const;
+
+const bucketSources = (key: string) => NORMALIZED_TO_SOURCE_KEYS[key] ?? [key];
 
 const parseHighlightFilters = (context: HighlightContextSummary | null): DerivedFilterParseResult => {
   const highlightedColumns = new Set<string>();
@@ -162,6 +213,7 @@ const parseHighlightFilters = (context: HighlightContextSummary | null): Derived
   const isActive = (id?: string) => !id || activeIds.has(id);
 
   const bucketKeys = new Set<string>();
+  const preflopBucketKeys = new Set<string>();
   const textureKeys = new Set<string>();
   const playersDealt = new Set<number>();
   const playerCounts = new Set<number>();
@@ -192,14 +244,29 @@ const parseHighlightFilters = (context: HighlightContextSummary | null): Derived
     return Number.isFinite(parsed) ? parsed : null;
   };
 
-  if (context.bet?.bucketKey && isActive(context.bet.filterId)) {
-    bucketKeys.add(context.bet.bucketKey);
-    highlightedColumns.add(context.bet.bucketKey);
+  const recordBucketFilter = (bucketKey: string | undefined, categoryKey: string) => {
+    const normalizedKey = normalizeBucketKey(bucketKey);
+    if (!normalizedKey) {
+      return null;
+    }
+    if (categoryKey === 'preflop') {
+      preflopBucketKeys.add(normalizedKey);
+    } else {
+      bucketKeys.add(normalizedKey);
+    }
+    return normalizedKey;
+  };
+
+  const betBucketKey = normalizeBucketKey(context.bet?.bucketKey);
+  if (betBucketKey && isActive(context.bet?.filterId)) {
+    bucketKeys.add(betBucketKey);
+    highlightedColumns.add(betBucketKey);
   }
 
-  if (context.facing?.bucketKey && isActive(context.facing.filterId)) {
-    bucketKeys.add(context.facing.bucketKey);
-    highlightedColumns.add(context.facing.bucketKey);
+  const facingBucketKey = normalizeBucketKey(context.facing?.bucketKey);
+  if (facingBucketKey && isActive(context.facing?.filterId)) {
+    bucketKeys.add(facingBucketKey);
+    highlightedColumns.add(facingBucketKey);
   }
 
   if (context.actionType === 'check') {
@@ -277,49 +344,57 @@ const parseHighlightFilters = (context: HighlightContextSummary | null): Derived
         return;
       }
       if (label === 'All-In') {
-        bucketKeys.add('all_in');
-        highlightedColumns.add('all_in');
+        const normalizedKey = recordBucketFilter('all_in', category.key);
+        if (normalizedKey && category.key === context.street) {
+          highlightedColumns.add(normalizedKey);
+        }
         return;
       }
-      if (label.startsWith('Pot Odds: ')) {
-        const bucket = label.slice('Pot Odds: '.length).trim();
-        const range = POT_ODDS_BUCKET_RANGES[bucket];
-        if (range) {
-          applyRatioRange(range);
+      if (label.startsWith('Bet Size Bucket: ')) {
+        const bucketLabel = label.slice('Bet Size Bucket: '.length).split('(')[0].trim();
+        const bucketKey = BUCKET_LABEL_TO_KEY[bucketLabel];
+        const normalizedKey = recordBucketFilter(bucketKey, category.key);
+        if (normalizedKey && category.key === context.street) {
+          highlightedColumns.add(normalizedKey);
+        }
+        return;
+      }
+      if (label.startsWith('Facing Bet Bucket: ')) {
+        const bucketLabel = label.slice('Facing Bet Bucket: '.length).split('(')[0].trim();
+        const bucketKey = BUCKET_LABEL_TO_KEY[bucketLabel];
+        const normalizedKey = recordBucketFilter(bucketKey, category.key);
+        if (normalizedKey && category.key === context.street) {
+          highlightedColumns.add(normalizedKey);
+        }
+        return;
+      }
+      if (POT_ODDS_BUCKET_RANGES[label]) {
+        applyRatioRange(POT_ODDS_BUCKET_RANGES[label]);
+        return;
+      }
+      if (label.startsWith('Facing Size >= ')) {
+        const threshold = parseFloat(label.slice('Facing Size >= '.length));
+        if (Number.isFinite(threshold)) {
+          ratioMin = ratioMin !== null ? Math.max(ratioMin, threshold / 100) : threshold / 100;
+        }
+        return;
+      }
+      if (label.startsWith('Facing Size <= ')) {
+        const threshold = parseFloat(label.slice('Facing Size <= '.length));
+        if (Number.isFinite(threshold)) {
+          ratioMax = ratioMax !== null ? Math.min(ratioMax, threshold / 100) : threshold / 100;
         }
         return;
       }
     });
   });
 
-  context.filters?.boardCategories.forEach((category) => {
-    if (category.key !== 'flop') {
-      return;
-    }
-    category.filters.forEach((filter) => {
-      if (!isActive(filter.id)) {
-        return;
-      }
-      const key = TEXTURE_LABEL_TO_KEY[filter.label];
-      if (key) {
-        textureKeys.add(key);
-      }
-    });
-  });
-
-  if (bucketKeys.size === 0 && context.actionType !== 'check') {
-    // no active bucket filters; ensure highlighted columns still reflect facing/bet states for context
-    if (context.bet?.bucketKey) {
-      highlightedColumns.add(context.bet.bucketKey);
-    }
-    if (context.facing?.bucketKey) {
-      highlightedColumns.add(context.facing.bucketKey);
-    }
-  }
-
   const filters: DerivedRequestFilters = {};
   if (bucketKeys.size > 0) {
     filters.bucketKeys = Array.from(bucketKeys);
+  }
+  if (preflopBucketKeys.size > 0) {
+    filters.preflopBucketKeys = Array.from(preflopBucketKeys);
   }
   if (textureKeys.size > 0) {
     filters.textureKeys = Array.from(textureKeys);
@@ -363,7 +438,28 @@ const parseHighlightFilters = (context: HighlightContextSummary | null): Derived
 
   return { filters, highlightedColumns };
 };
+type DerivedRequestFilters = {
+  bucketKeys?: string[];
+  preflopBucketKeys?: string[];
+  textureKeys?: string[];
+  playersDealt?: number[];
+  playerCounts?: number[];
+  playersRemaining?: number[];
+  heroPositions?: string[];
+  relativePositions?: string[];
+  effectiveStackBuckets?: string[];
+  sprBuckets?: string[];
+  ratioMin?: number | null;
+  ratioMax?: number | null;
+  minPreflopRaises?: number | null;
+  allInCalled?: boolean;
+  lineKeys?: string[];
+};
 
+type DerivedFilterParseResult = {
+  filters: DerivedRequestFilters;
+  highlightedColumns: Set<string>;
+};
 const derivePercentColor = (value: number, columnMax: number) => {
   if (columnMax <= 0 || value <= 0) {
     return { bg: 'white', color: 'gray.800' };
@@ -377,7 +473,7 @@ const derivePercentColor = (value: number, columnMax: number) => {
   return { bg: `rgb(${r}, ${g}, ${b})`, color: textColor };
 };
 
-const deriveCountColor = (value: number, max: number) => {
+const deriveShareColor = (value: number, max: number) => {
   if (max <= 0 || value <= 0) {
     return { bg: 'white', color: 'gray.800' };
   }
@@ -390,13 +486,18 @@ const deriveCountColor = (value: number, max: number) => {
   return { bg: `rgb(${r}, ${g}, ${b})`, color: textColor };
 };
 
-const deriveRowGradient = (value: number, rowMax: number, palette: 'orange' | 'red', rowMin = 0) => {
-  if (rowMax <= rowMin || value <= rowMin) {
+const deriveRowGradientFromBase = (
+  value: number,
+  rowMax: number,
+  rowMin: number,
+  base: { r: number; g: number; b: number },
+) => {
+  if (rowMax <= rowMin) {
     return { bg: 'white', color: 'gray.800' };
   }
+  const clamped = Math.min(Math.max(value, rowMin), rowMax);
   const range = rowMax - rowMin;
-  const intensity = Math.min(Math.max((value - rowMin) / range, 0), 1);
-  const base = palette === 'orange' ? { r: 237, g: 137, b: 54 } : { r: 229, g: 62, b: 62 };
+  const intensity = Math.min(Math.max((clamped - rowMin) / range, 0), 1);
   const r = Math.round(255 - (255 - base.r) * intensity);
   const g = Math.round(255 - (255 - base.g) * intensity);
   const b = Math.round(255 - (255 - base.b) * intensity);
@@ -404,144 +505,24 @@ const deriveRowGradient = (value: number, rowMax: number, palette: 'orange' | 'r
   return { bg: `rgb(${r}, ${g}, ${b})`, color: textColor };
 };
 
-type ResponseAccumulator = {
-  events: number;
-  foldEvents: number;
-  callEvents: number;
-  raiseEvents: number;
-  continueEvents: number;
-  ratioWeighted: number;
-  betWeighted: number;
-  addedFlopWeighted: number;
-  addedAllWeighted: number;
-  shareWeighted: number;
+const deriveRowGradient = (value: number, rowMax: number, palette: 'orange' | 'red', rowMin = 0) => {
+  const base = palette === 'orange' ? { r: 237, g: 137, b: 54 } : { r: 229, g: 62, b: 62 };
+  return deriveRowGradientFromBase(value, rowMax, rowMin, base);
 };
 
-type HandAccumulator = {
-  events: number;
-  categories: Map<string, number>;
-};
+const deriveRowGradientGreen = (value: number, rowMax: number, rowMin = 0) =>
+  deriveRowGradientFromBase(value, rowMax, rowMin, { r: 56, g: 161, b: 105 });
 
-const createResponseAccumulator = (): ResponseAccumulator => ({
-  events: 0,
-  foldEvents: 0,
-  callEvents: 0,
-  raiseEvents: 0,
-  continueEvents: 0,
-  ratioWeighted: 0,
-  betWeighted: 0,
-  addedFlopWeighted: 0,
-  addedAllWeighted: 0,
-  shareWeighted: 0,
-});
+const deriveRowGradientPurple = (value: number, rowMax: number, rowMin = 0) =>
+  deriveRowGradientFromBase(value, rowMax, rowMin, { r: 128, g: 90, b: 213 });
 
-const createHandAccumulator = (): HandAccumulator => ({ events: 0, categories: new Map() });
-
-const normaliseBucketKey = (key: string) => LEGACY_BUCKET_KEY_MAP[key] ?? key;
-
-const normalizeLineResults = (
-  _bucketOrder: LineBucketMeta[],
-  responseMetrics: LineResponseMetric[],
-  handMetrics: LineHandMetric[],
-) => {
-  const responseAggregates = new Map<string, ResponseAccumulator>();
-
-  responseMetrics.forEach((metric) => {
-    const mappedKey = normaliseBucketKey(metric.bucket_key);
-    if (!NORMALIZED_BUCKET_KEY_SET.has(mappedKey)) {
-      return;
-    }
-    const accumulator = responseAggregates.get(mappedKey) ?? createResponseAccumulator();
-    responseAggregates.set(mappedKey, accumulator);
-
-    const events = metric.events ?? 0;
-    accumulator.events += events;
-    accumulator.foldEvents += metric.fold_events ?? 0;
-    accumulator.callEvents += metric.call_events ?? 0;
-    accumulator.raiseEvents += metric.raise_events ?? 0;
-    accumulator.continueEvents += metric.continue_events ?? 0;
-    accumulator.ratioWeighted += (metric.avg_ratio ?? 0) * events;
-    accumulator.betWeighted += (metric.avg_bet_bb ?? 0) * events;
-    accumulator.addedFlopWeighted += (metric.avg_added_flop_bb ?? 0) * events;
-    accumulator.addedAllWeighted += (metric.avg_added_all_bb ?? 0) * events;
-    accumulator.shareWeighted += (metric.avg_share_all ?? 0) * events;
-  });
-
-  const normalisedResponseMetrics: LineResponseMetric[] = NORMALIZED_BUCKETS.map(({ key, label }) => {
-    const aggregate = responseAggregates.get(key);
-    const events = aggregate?.events ?? 0;
-    const foldEvents = aggregate?.foldEvents ?? 0;
-    const callEvents = aggregate?.callEvents ?? 0;
-    const raiseEvents = aggregate?.raiseEvents ?? 0;
-    const continueEvents = aggregate?.continueEvents ?? 0;
-    const avgRatio = aggregate && aggregate.events > 0 ? aggregate.ratioWeighted / aggregate.events : 0;
-    const avgBet = aggregate && aggregate.events > 0 ? aggregate.betWeighted / aggregate.events : 0;
-    const avgAddedFlop = aggregate && aggregate.events > 0 ? aggregate.addedFlopWeighted / aggregate.events : 0;
-    const avgAddedAll = aggregate && aggregate.events > 0 ? aggregate.addedAllWeighted / aggregate.events : 0;
-    const avgShareAll = aggregate && aggregate.events > 0 ? aggregate.shareWeighted / aggregate.events : 0;
-
-    return {
-      bucket_key: key,
-      bucket_label: label,
-      events,
-      fold_events: foldEvents,
-      call_events: callEvents,
-      raise_events: raiseEvents,
-      continue_events: continueEvents,
-      fold_pct: events > 0 ? (foldEvents / events) * 100 : 0,
-      call_pct: events > 0 ? (callEvents / events) * 100 : 0,
-      raise_pct: events > 0 ? (raiseEvents / events) * 100 : 0,
-      continue_pct: events > 0 ? (continueEvents / events) * 100 : 0,
-      avg_ratio: avgRatio,
-      avg_bet_bb: avgBet,
-      avg_added_flop_bb: avgAddedFlop,
-      avg_added_all_bb: avgAddedAll,
-      avg_share_all: avgShareAll,
-    };
-  });
-
-  const handAggregates = new Map<string, HandAccumulator>();
-  handMetrics.forEach((metric) => {
-    const mappedKey = normaliseBucketKey(metric.bucket_key);
-    if (!NORMALIZED_BUCKET_KEY_SET.has(mappedKey)) {
-      return;
-    }
-    const accumulator = handAggregates.get(mappedKey) ?? createHandAccumulator();
-    handAggregates.set(mappedKey, accumulator);
-    const events = metric.events ?? 0;
-    accumulator.events += events;
-    Object.entries(metric.categories ?? {}).forEach(([category, count]) => {
-      accumulator.categories.set(category, (accumulator.categories.get(category) ?? 0) + count);
-    });
-  });
-
-  const normalisedHandMetrics: LineHandMetric[] = NORMALIZED_BUCKETS.map(({ key, label }) => {
-    const aggregate = handAggregates.get(key);
-    const categories: Record<string, number> = {};
-    if (aggregate) {
-      aggregate.categories.forEach((count, category) => {
-        categories[category] = count;
-      });
-    }
-    return {
-      bucket_key: key,
-      bucket_label: label,
-      events: aggregate?.events ?? 0,
-      categories,
-    };
-  });
-
-  return {
-    bucketOrder: NORMALIZED_BUCKETS.map((bucket) => ({ ...bucket })),
-    responseMetrics: normalisedResponseMetrics,
-    handMetrics: normalisedHandMetrics,
-  };
-};
-
+const deriveRowGradientBlue = (value: number, rowMax: number, rowMin = 0) =>
+  deriveRowGradientFromBase(value, rowMax, rowMin, { r: 66, g: 153, b: 225 });
 const LineExplorer = () => {
   const [composerState, dispatch] = useReducer(tableComposerReducer, undefined, () => createInitialTableComposerState());
   const [highlightContext, setHighlightContext] = useState<HighlightContextSummary | null>(null);
-  const [groupedResponderView, setGroupedResponderView] = useState(true);
+  const [groupedHandView, setGroupedHandView] = useState(true);
+  const [showBetBuckets, setShowBetBuckets] = useState(true);
   const parsedHighlight = useMemo(() => parseHighlightFilters(highlightContext), [highlightContext]);
 
   const descriptorPayload = useMemo(() => {
@@ -566,6 +547,12 @@ const LineExplorer = () => {
       combinedFilters.bucket_keys = Array.from(expanded);
     } else {
       delete combinedFilters.bucket_keys;
+    }
+
+    if (derivedFilters.preflopBucketKeys && derivedFilters.preflopBucketKeys.length > 0) {
+      combinedFilters.preflopBucketKeys = derivedFilters.preflopBucketKeys;
+    } else {
+      delete combinedFilters.preflopBucketKeys;
     }
 
     if (derivedFilters.textureKeys && derivedFilters.textureKeys.length > 0) {
@@ -656,17 +643,44 @@ const LineExplorer = () => {
   const { data, loading, error, usingSample } = useLineQuery(shouldQuery ? descriptorPayload : null);
   const isLoadingResults = shouldQuery && loading;
 
-  const rawBucketOrder = data?.bucket_order ?? DEFAULT_BUCKETS;
-  const rawResponseMetrics = data?.response_metrics ?? [];
-  const rawHandMetrics = data?.hand_metrics ?? [];
-
-  const { bucketOrder, responseMetrics, handMetrics } = useMemo(
-    () => normalizeLineResults(rawBucketOrder, rawResponseMetrics, rawHandMetrics),
-    [rawBucketOrder, rawResponseMetrics, rawHandMetrics],
+  const rawBucketOrder = data?.bucket_order;
+  const bucketOrder = useMemo(
+    () => normalizeBucketOrder(rawBucketOrder ?? DEFAULT_BUCKETS),
+    [rawBucketOrder],
   );
-  const totalEvents = data?.context?.total_events ?? 0;
+  const actionSummaries = data?.action_summaries ?? [];
+  const totalsSummary = data?.totals ?? null;
 
-  const descriptorSteps = shouldQuery ? data?.descriptor?.steps ?? descriptorPayload.steps : [];
+  const actionSummaryMap = useMemo(() => {
+    const map = new Map<string, LineActionSummary>();
+    const labelLookup = new Map<string, string>();
+    bucketOrder.forEach((bucket) => labelLookup.set(bucket.key, bucket.label));
+
+    actionSummaries.forEach((summary) => {
+      if (!summary.action_key) {
+        return;
+      }
+      const normalizedKey = normalizeBucketKey(summary.action_key);
+      if (!normalizedKey) {
+        return;
+      }
+      const label = labelLookup.get(normalizedKey) ?? summary.action_label ?? normalizedKey;
+      const target = map.get(normalizedKey) ?? createEmptyActionSummary(normalizedKey, label);
+      accumulateActionSummary(target, summary);
+      target.action_label = label;
+      map.set(normalizedKey, target);
+    });
+
+    map.forEach((summary, key) => {
+      summary.action_key = key;
+      summary.action_label = labelLookup.get(key) ?? summary.action_label ?? key;
+      finalizeActionSummary(summary);
+    });
+    return map;
+  }, [actionSummaries, bucketOrder]);
+  const totalEvents = totalsSummary?.events ?? data?.context?.total_events ?? 0;
+  const actorLabel = highlightContext?.position ?? null;
+
   const bucketOptions: BucketOption[] = useMemo(
     () => bucketOrder.filter((bucket) => bucket.key !== 'check').map((bucket) => ({ key: bucket.key, label: bucket.label })),
     [bucketOrder],
@@ -767,37 +781,58 @@ const LineExplorer = () => {
               pointerEvents={isLoadingResults ? 'none' : 'auto'}
               transition="opacity 0.2s ease"
             >
-              <ContextSummary totalEvents={totalEvents} steps={descriptorSteps} excludeHero={composerState.excludeHero} />
+              <Stack spacing={4}>
+                <Flex align="center" justify="space-between" wrap="wrap" gap={3}>
+                  <Heading size="md">Highlighted Player Hands &amp; Actions</Heading>
+                  <HStack spacing={4}>
+                    <FormControl display="flex" alignItems="center" width="auto">
+                      <FormLabel htmlFor="hero-hand-grouped-toggle" mb="0" fontSize="sm">
+                        Group Hand Types
+                      </FormLabel>
+                      <Switch
+                        id="hero-hand-grouped-toggle"
+                        size="sm"
+                        isChecked={groupedHandView}
+                        onChange={(event) => setGroupedHandView(event.target.checked)}
+                        colorScheme="purple"
+                      />
+                    </FormControl>
+                    <FormControl display="flex" alignItems="center" width="auto">
+                      <FormLabel htmlFor="hero-bet-bucket-toggle" mb="0" fontSize="sm">
+                        Show Bet Size Buckets
+                      </FormLabel>
+                      <Switch
+                        id="hero-bet-bucket-toggle"
+                        size="sm"
+                        isChecked={showBetBuckets}
+                        onChange={(event) => setShowBetBuckets(event.target.checked)}
+                        colorScheme="purple"
+                      />
+                    </FormControl>
+                  </HStack>
+                </Flex>
+                <HeroHandMatrix
+                  bucketOrder={bucketOrder}
+                  summaries={actionSummaryMap}
+                  totals={totalsSummary ?? undefined}
+                  highlightedColumns={highlightedColumns}
+                  groupedView={groupedHandView}
+                  totalEvents={totalEvents}
+                  actorLabel={actorLabel ?? undefined}
+                  showBetBuckets={showBetBuckets}
+                />
+              </Stack>
+
+              <Divider />
 
               <Stack spacing={4}>
-                <Heading size="md">Response Metrics</Heading>
-                <ResponseTable bucketOrder={bucketOrder} metrics={responseMetrics} highlightedColumns={highlightedColumns} />
-            </Stack>
-
-            <Divider />
-
-            <Stack spacing={4}>
-              <Flex align="center" justify="space-between" wrap="wrap" gap={3}>
-                <Heading size="md">Responder Hand Breakdown</Heading>
-                <FormControl display="flex" alignItems="center" width="auto">
-                  <FormLabel htmlFor="responder-hand-grouped-toggle" mb="0" fontSize="sm">
-                    Grouped View
-                  </FormLabel>
-                  <Switch
-                    id="responder-hand-grouped-toggle"
-                    size="sm"
-                    isChecked={groupedResponderView}
-                    onChange={(event) => setGroupedResponderView(event.target.checked)}
-                    colorScheme="purple"
-                  />
-                </FormControl>
-              </Flex>
-              <HandBreakdownTable
-                bucketOrder={bucketOrder}
-                metrics={handMetrics}
-                highlightedColumns={highlightedColumns}
-                groupedView={groupedResponderView}
-              />
+                <Heading size="md">Responses to Highlighted Actions</Heading>
+                <ResponderMatrix
+                  bucketOrder={bucketOrder}
+                  summaries={actionSummaryMap}
+                  totals={totalsSummary ?? undefined}
+                  highlightedColumns={highlightedColumns}
+                />
               </Stack>
             </Stack>
           </Box>
@@ -806,413 +841,781 @@ const LineExplorer = () => {
     </Box>
   );
 };
+const createEmptyResponderActionCounts = (): Record<string, number> => ({
+  check: 0,
+  bet: 0,
+  call: 0,
+  raise: 0,
+  fold: 0,
+});
 
-const ContextSummary = ({
-  totalEvents,
-  steps,
-  excludeHero,
-}: {
-  totalEvents: number;
-  steps: Array<{
-    street: string;
-    actor: string;
-    action: string;
-    qualifiers?: string[];
-    sizing?: { bucket_keys?: string[]; ratio_min?: number | null; ratio_max?: number | null; absolute_bb?: number | null; label?: string | null } | null;
-  }>;
-  excludeHero: boolean;
-}) => (
-  <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" bg="blackAlpha.400" p={{ base: 4, md: 6 }}>
-    <Stack spacing={2}>
-      <Text fontSize="sm" color="whiteAlpha.700" textTransform="uppercase" letterSpacing="wider">
-        Scenario Summary
-      </Text>
-      <Text color="whiteAlpha.900">{totalEvents.toLocaleString()} matching events.</Text>
-      <Text color="whiteAlpha.800" fontSize="sm">
-        {excludeHero ? 'Hero hands excluded.' : 'Hero hands included.'}
-      </Text>
-      <Stack spacing={1} color="whiteAlpha.800" fontSize="sm">
-        {steps.map((step, index) => (
-          <Text key={`${step.street}-${index}`}>
-            {step.street.toUpperCase()}: {step.actor} {step.action}
-          </Text>
-        ))}
-      </Stack>
-    </Stack>
-  </Box>
-);
+const createEmptyActionSummary = (key: string, label: string): LineActionSummary => ({
+  action_key: key,
+  action_label: label,
+  events: 0,
+  fold_events: 0,
+  call_events: 0,
+  raise_events: 0,
+  continue_events: 0,
+  fold_pct: 0,
+  call_pct: 0,
+  raise_pct: 0,
+  continue_pct: 0,
+  avg_ratio: 0,
+  avg_bet_bb: 0,
+  avg_added_flop_bb: 0,
+  avg_added_all_bb: 0,
+  avg_share_all: 0,
+  hand_categories: {},
+  responder_summary: {
+    total_responses: 0,
+    action_counts: createEmptyResponderActionCounts(),
+    hand_categories: {},
+    bet_bucket_counts: {},
+    seats: [],
+  },
+  hero_actions: {},
+});
 
-const ResponseTable = ({
+const formatPercentage = (value: number) => `${value.toFixed(1)}%`;
+
+const mergeNumericRecord = (target: Record<string, number>, source?: Record<string, number>) => {
+  if (!source) {
+    return;
+  }
+  Object.entries(source).forEach(([key, value]) => {
+    if (value === undefined) {
+      return;
+    }
+    target[key] = (target[key] ?? 0) + value;
+  });
+};
+
+const createEmptyResponderSeatSummary = (seatLabel: string): LineResponderSeatSummary => ({
+  seat_label: seatLabel,
+  responses: 0,
+  action_counts: createEmptyResponderActionCounts(),
+  hand_categories: {},
+  bet_bucket_counts: {},
+  relative_positions: {},
+});
+
+const mergeSeatSummary = (target: LineResponderSeatSummary, source: LineResponderSeatSummary) => {
+  target.responses += source.responses ?? 0;
+  mergeNumericRecord(target.action_counts, source.action_counts);
+  mergeNumericRecord(target.hand_categories, source.hand_categories);
+  mergeNumericRecord(target.bet_bucket_counts, source.bet_bucket_counts);
+  mergeNumericRecord(target.relative_positions, source.relative_positions);
+};
+
+const weightedAverage = (currentValue: number, currentWeight: number, nextValue: number, nextWeight: number) => {
+  const totalWeight = currentWeight + nextWeight;
+  if (totalWeight <= 0) {
+    return 0;
+  }
+  const safeCurrent = Number.isFinite(currentValue) ? currentValue : 0;
+  const safeNext = Number.isFinite(nextValue) ? nextValue : 0;
+  return (safeCurrent * currentWeight + safeNext * nextWeight) / totalWeight;
+};
+
+const accumulateActionSummary = (target: LineActionSummary, source: LineActionSummary) => {
+  const sourceEvents = source.events ?? 0;
+  const priorEvents = target.events ?? 0;
+  const combinedEvents = priorEvents + sourceEvents;
+
+  target.avg_ratio = weightedAverage(target.avg_ratio ?? 0, priorEvents, source.avg_ratio ?? 0, sourceEvents);
+  target.avg_bet_bb = weightedAverage(target.avg_bet_bb ?? 0, priorEvents, source.avg_bet_bb ?? 0, sourceEvents);
+  target.avg_added_flop_bb = weightedAverage(
+    target.avg_added_flop_bb ?? 0,
+    priorEvents,
+    source.avg_added_flop_bb ?? 0,
+    sourceEvents,
+  );
+  target.avg_added_all_bb = weightedAverage(
+    target.avg_added_all_bb ?? 0,
+    priorEvents,
+    source.avg_added_all_bb ?? 0,
+    sourceEvents,
+  );
+  target.avg_share_all = weightedAverage(target.avg_share_all ?? 0, priorEvents, source.avg_share_all ?? 0, sourceEvents);
+
+  target.events = combinedEvents;
+  target.fold_events += source.fold_events ?? 0;
+  target.call_events += source.call_events ?? 0;
+  target.raise_events += source.raise_events ?? 0;
+  target.continue_events += source.continue_events ?? 0;
+
+  mergeNumericRecord(target.hand_categories, source.hand_categories);
+  mergeNumericRecord(target.hero_actions, source.hero_actions);
+
+  const targetResponder = target.responder_summary;
+  const sourceResponder = source.responder_summary;
+  targetResponder.total_responses += sourceResponder.total_responses ?? 0;
+  mergeNumericRecord(targetResponder.action_counts, sourceResponder.action_counts);
+  mergeNumericRecord(targetResponder.hand_categories, sourceResponder.hand_categories);
+  mergeNumericRecord(targetResponder.bet_bucket_counts, sourceResponder.bet_bucket_counts);
+
+  sourceResponder.seats?.forEach((seat) => {
+    const existing = targetResponder.seats.find((entry) => entry.seat_label === seat.seat_label);
+    if (existing) {
+      mergeSeatSummary(existing, seat);
+      return;
+    }
+    const fresh = createEmptyResponderSeatSummary(seat.seat_label);
+    mergeSeatSummary(fresh, seat);
+    targetResponder.seats.push(fresh);
+  });
+};
+
+const finalizeActionSummary = (summary: LineActionSummary) => {
+  const totalEvents = summary.events ?? 0;
+  if (totalEvents > 0) {
+    summary.fold_pct = (summary.fold_events / totalEvents) * 100;
+    summary.call_pct = (summary.call_events / totalEvents) * 100;
+    summary.raise_pct = (summary.raise_events / totalEvents) * 100;
+    summary.continue_pct = (summary.continue_events / totalEvents) * 100;
+  } else {
+    summary.fold_pct = 0;
+    summary.call_pct = 0;
+    summary.raise_pct = 0;
+    summary.continue_pct = 0;
+  }
+  return summary;
+};
+const buildExtendedActionSummaries = (
+  bucketOrder: LineBucketMeta[],
+  summaries: Map<string, LineActionSummary>,
+) => {
+  const nonCheckKeys = bucketOrder
+    .map((bucket) => bucket.key)
+    .filter((key) => key !== 'check');
+
+  const extended = new Map<string, LineActionSummary>();
+  summaries.forEach((value, key) => extended.set(key, value));
+
+  if (nonCheckKeys.length > 0) {
+    const aggregate = createEmptyActionSummary('bet_any', 'Bet (Any)');
+
+    nonCheckKeys.forEach((key) => {
+      const summary = summaries.get(key);
+      if (!summary) {
+        return;
+      }
+      aggregate.events += summary.events;
+      aggregate.fold_events += summary.fold_events;
+      aggregate.call_events += summary.call_events;
+      aggregate.raise_events += summary.raise_events;
+      aggregate.continue_events += summary.continue_events;
+      Object.entries(summary.hand_categories).forEach(([handKey, count]) => {
+        aggregate.hand_categories[handKey] = (aggregate.hand_categories[handKey] ?? 0) + count;
+      });
+      mergeNumericRecord(aggregate.hero_actions, summary.hero_actions);
+      aggregate.responder_summary.total_responses += summary.responder_summary.total_responses;
+      mergeNumericRecord(aggregate.responder_summary.action_counts, summary.responder_summary.action_counts);
+      mergeNumericRecord(aggregate.responder_summary.hand_categories, summary.responder_summary.hand_categories);
+      mergeNumericRecord(aggregate.responder_summary.bet_bucket_counts, summary.responder_summary.bet_bucket_counts);
+    });
+
+    if (aggregate.events > 0) {
+      aggregate.hero_actions.bet_any = aggregate.events;
+      aggregate.hero_actions.bet = (aggregate.hero_actions.bet ?? 0) + aggregate.events;
+    }
+
+    extended.set('bet_any', aggregate);
+  }
+
+  return { extended, nonCheckKeys } as const;
+};
+
+const getHandCategoryCount = (summary: LineActionSummary | undefined, definition: HandDefinition) => {
+  if (!summary) {
+    return 0;
+  }
+  return definition.members.reduce((accumulator, member) => accumulator + (summary.hand_categories?.[member] ?? 0), 0);
+};
+type HeroHandCell = {
+  key: string;
+  numerator: number;
+  denominator: number;
+  percent: number;
+};
+
+type HeroHandCellBase = {
+  key: string;
+  numerator: number;
+};
+
+type HeroHandRow = {
+  key: string;
+  label: string;
+  events: number;
+  handCells: HeroHandCell[];
+  rowMaxPercent: number;
+  rowMinPercent: number;
+  sharePercentTotal: number;
+  sharePercentBet: number;
+  shareDisplayPercent: number;
+  shareShading: 'green' | 'orange' | 'none';
+  isBetBucket: boolean;
+  isBetAggregate: boolean;
+  isCheckRow: boolean;
+  isAnyRow: boolean;
+};
+
+type HeroHandRowBase = {
+  key: string;
+  label: string;
+  events: number;
+  handCells: HeroHandCellBase[];
+};
+const HeroHandMatrix = ({
   bucketOrder,
-  metrics,
+  summaries,
+  totals,
   highlightedColumns,
+  groupedView,
+  totalEvents,
+  actorLabel,
+  showBetBuckets,
 }: {
   bucketOrder: LineBucketMeta[];
-  metrics: LineResponseMetric[];
+  summaries: Map<string, LineActionSummary>;
+  totals?: LineActionSummary;
   highlightedColumns?: Set<string>;
+  groupedView: boolean;
+  totalEvents: number;
+  actorLabel?: string;
+  showBetBuckets: boolean;
 }) => {
-  const bucketKeys = useMemo(() => bucketOrder.map((bucket) => bucket.key).filter((key) => key !== 'check'), [bucketOrder]);
-  const dataColumns = useMemo(() => ['check', ...bucketKeys], [bucketKeys]);
-  const columnLabels = useMemo(() => {
-    const map = new Map<string, string>();
-    map.set('check', 'Check');
-    bucketOrder.forEach((bucket) => {
-      map.set(bucket.key, bucket.label);
-    });
-    return map;
-  }, [bucketOrder]);
-
-  const metricMap = useMemo(() => {
-    const map = new Map<string, LineResponseMetric>();
-    metrics.forEach((metric) => map.set(metric.bucket_key, metric));
-    return map;
-  }, [metrics]);
-
-  const maxEvents = useMemo(
-    () => dataColumns.reduce((max, key) => Math.max(max, metricMap.get(key)?.events ?? 0), 0),
-    [dataColumns, metricMap],
+  const { extended: extendedSummaries, nonCheckKeys } = useMemo(
+    () => buildExtendedActionSummaries(bucketOrder, summaries),
+    [bucketOrder, summaries],
   );
 
-  const columnMax = useMemo(() => {
-    const result: Record<string, number> = {};
-    dataColumns.forEach((key) => {
-      const metric = metricMap.get(key);
-      if (!metric) {
-        result[key] = 0;
-        return;
-      }
-      result[key] = Math.max(metric.fold_pct, metric.call_pct, metric.raise_pct, metric.continue_pct);
-    });
-    return result;
-  }, [dataColumns, metricMap]);
+  const handDefinitions = useMemo(
+    () =>
+      (groupedView ? HAND_GROUP_DEFINITIONS : HAND_TYPE_DEFINITIONS).filter(
+        (definition) => definition.key !== 'unknown',
+      ),
+    [groupedView],
+  );
 
-  const makeRange = (selector: (metric: LineResponseMetric) => number) => {
-    let min = Number.POSITIVE_INFINITY;
-    let max = 0;
-    dataColumns.forEach((key) => {
-      const metric = metricMap.get(key);
-      if (!metric) {
-        return;
-      }
-      const value = selector(metric);
-      if (value > 0 && value < min) {
-        min = value;
-      }
-      if (value > max) {
-        max = value;
-      }
-    });
-    if (!Number.isFinite(min)) {
-      min = 0;
+  const actions = useMemo(() => {
+    const items: Array<{ key: string; label: string }> = [{ key: 'check', label: 'Check' }];
+    if (nonCheckKeys.length > 0) {
+      items.push({ key: 'bet_any', label: 'Bet (Any)' });
     }
-    return { min, max };
-  };
+    bucketOrder.forEach((bucket) => {
+      if (bucket.key === 'check') {
+        return;
+      }
+      if (!showBetBuckets) {
+        return;
+      }
+      items.push({ key: bucket.key, label: bucket.label });
+    });
+    return items;
+  }, [bucketOrder, nonCheckKeys.length, showBetBuckets]);
 
-  const ratioRange = makeRange((metric) => metric.avg_ratio);
-  const betRange = makeRange((metric) => metric.avg_bet_bb);
-  const flopAddedRange = makeRange((metric) => metric.avg_added_flop_bb);
-  const allAddedRange = makeRange((metric) => metric.avg_added_all_bb);
-  const shareRange = makeRange((metric) => metric.avg_share_all);
+  const actionSummaries = useMemo(() => {
+    const map = new Map<string, LineActionSummary>();
+    actions.forEach((action) => {
+      const summary = extendedSummaries.get(action.key) ?? createEmptyActionSummary(action.key, action.label);
+      map.set(action.key, summary);
+    });
+    return map;
+  }, [actions, extendedSummaries]);
 
-  const outlineColor = 'rgba(128, 90, 213, 0.65)';
-  const isHighlighted = (key: string) => highlightedColumns?.has(key) ?? false;
-  const headerHighlightProps = (key: string) => (isHighlighted(key) ? { color: 'purple.200', fontWeight: 'semibold' } : {});
-  const columnOutlineProps = (key: string, { top = false, bottom = false }: { top?: boolean; bottom?: boolean }) =>
-    isHighlighted(key)
-      ? {
-          borderLeft: `2px solid ${outlineColor}`,
-          borderRight: `2px solid ${outlineColor}`,
-          ...(top
-            ? {
-                borderTop: `2px solid ${outlineColor}`,
-                borderTopLeftRadius: 'md',
-                borderTopRightRadius: 'md',
-              }
-            : {}),
-          ...(bottom
-            ? {
-                borderBottom: `2px solid ${outlineColor}`,
-                borderBottomLeftRadius: 'md',
-                borderBottomRightRadius: 'md',
-              }
-            : {}),
-          position: 'relative' as const,
-          zIndex: 1,
+  const handTotals = useMemo(() => {
+    const totalsMap = new Map<string, number>();
+    const totalSummary = totals ?? null;
+    handDefinitions.forEach((definition) => {
+      const count = getHandCategoryCount(totalSummary ?? undefined, definition);
+      totalsMap.set(definition.key, count);
+    });
+    return totalsMap;
+  }, [handDefinitions, totals]);
+
+  const heroTableMetrics = useMemo(() => {
+    const totalSummary = totals ?? createEmptyActionSummary('total', 'Total');
+    const checkSummary = actionSummaries.get('check');
+    const uniqueBetEvents = Math.max(totalEvents - (checkSummary?.events ?? 0), 0);
+
+    const betTotalsByHand = new Map<string, number>();
+    handDefinitions.forEach((definition) => {
+      const totalCount = getHandCategoryCount(totalSummary, definition);
+      const checkCount = getHandCategoryCount(checkSummary, definition);
+      betTotalsByHand.set(definition.key, Math.max(totalCount - checkCount, 0));
+    });
+
+    const baseRows: HeroHandRowBase[] = actions.map((action) => {
+      const summary = actionSummaries.get(action.key) ?? createEmptyActionSummary(action.key, action.label);
+      const handCells: HeroHandCellBase[] = handDefinitions.map((definition) => {
+        const numerator = getHandCategoryCount(summary, definition);
+        return { key: definition.key, numerator };
+      });
+      return {
+        key: action.key,
+        label: action.label,
+        events: summary.events,
+        handCells,
+      };
+    });
+
+    let processedRows: HeroHandRow[] = baseRows.map((row) => {
+      const isCheckRow = row.key === 'check';
+      const isBetAggregate = row.key === 'bet_any';
+      const isBetBucket = !isCheckRow && !isBetAggregate;
+
+      let rowMaxPercent = 0;
+      let rowMinPercent = Number.POSITIVE_INFINITY;
+
+      const processedCells = row.handCells.map<HeroHandCell>((cell) => {
+        const denominatorSource = isBetBucket ? betTotalsByHand : handTotals;
+        const denominator = denominatorSource.get(cell.key) ?? 0;
+        const percent = denominator > 0 ? (cell.numerator / denominator) * 100 : 0;
+        if (percent > rowMaxPercent) {
+          rowMaxPercent = percent;
         }
-      : {};
+        if (percent < rowMinPercent) {
+          rowMinPercent = percent;
+        }
+        return { key: cell.key, numerator: cell.numerator, denominator, percent };
+      });
 
-  const percentRows = [
-    { key: 'fold_pct', label: 'Fold %', selector: (metric: LineResponseMetric) => metric.fold_pct },
-    { key: 'call_pct', label: 'Call %', selector: (metric: LineResponseMetric) => metric.call_pct },
-    { key: 'raise_pct', label: 'Raise %', selector: (metric: LineResponseMetric) => metric.raise_pct },
-    { key: 'continue_pct', label: 'Continue %', selector: (metric: LineResponseMetric) => metric.continue_pct },
-  ];
+      if (!Number.isFinite(rowMinPercent)) {
+        rowMinPercent = 0;
+      }
 
-  const metricRows = [
-    { key: 'avg_ratio', label: 'Avg Turn Bet (Pot Ratio)', selector: (metric: LineResponseMetric) => metric.avg_ratio, range: ratioRange, palette: 'orange' as const },
-    { key: 'avg_bet_bb', label: 'Avg Turn Bet (BB)', selector: (metric: LineResponseMetric) => metric.avg_bet_bb, range: betRange, palette: 'orange' as const },
-    { key: 'avg_added_flop_bb', label: 'Avg Added Pot (Flop, BB)', selector: (metric: LineResponseMetric) => metric.avg_added_flop_bb, range: flopAddedRange, palette: 'orange' as const },
-    { key: 'avg_added_all_bb', label: 'Avg Added Pot (All Streets, BB)', selector: (metric: LineResponseMetric) => metric.avg_added_all_bb, range: allAddedRange, palette: 'orange' as const },
-    { key: 'avg_share_all', label: 'Avg Final Pot Share', selector: (metric: LineResponseMetric) => metric.avg_share_all, range: shareRange, palette: 'red' as const },
-  ];
+      const sharePercentTotal = totalEvents > 0 ? (row.events / totalEvents) * 100 : 0;
+      const sharePercentBet = uniqueBetEvents > 0 ? (row.events / uniqueBetEvents) * 100 : 0;
 
-  const totalRows = 1 + percentRows.length + metricRows.length;
-  const lastRowIndex = totalRows - 1;
+      let shareDisplayPercent = sharePercentTotal;
+      let shareShading: 'green' | 'orange' | 'none' = 'none';
 
-  const eventRow = (
-    <Tr key="event-count">
-      <Th scope="row">Event Count</Th>
-      {dataColumns.map((key) => {
-        const value = metricMap.get(key)?.events ?? 0;
-        const { bg, color } = deriveCountColor(value, maxEvents);
-        const props = columnOutlineProps(key, { top: true, bottom: totalRows === 1 });
-        return (
-          <Td key={`response-events-${key}`} isNumeric fontWeight="semibold" bg={bg} color={color} {...props}>
-            {value.toLocaleString()}
-          </Td>
-        );
-      })}
-    </Tr>
-  );
+      if (isBetBucket) {
+        shareDisplayPercent = sharePercentBet;
+        shareShading = 'orange';
+      } else if (isBetAggregate || isCheckRow) {
+        shareShading = 'green';
+      }
 
-  let currentRowIndex = 1;
-  const percentRowElements = percentRows.map((row, index) => {
-    const rowIndex = currentRowIndex + index;
-    const bottom = rowIndex === lastRowIndex && metricRows.length === 0;
-    return (
-      <Tr key={row.key}>
-        <Th scope="row">{row.label}</Th>
-        {dataColumns.map((key) => {
-          const metric = metricMap.get(key);
-          const value = metric ? row.selector(metric) : 0;
-          const { bg, color } = derivePercentColor(value, columnMax[key] ?? 0);
-          const props = columnOutlineProps(key, { bottom });
-          const display = key === 'check' ? '—' : metric ? `${value.toFixed(1)}%` : '—';
-          return (
-            <Td key={`${row.key}-${key}`} isNumeric bg={bg} color={color} {...props}>
-              {display}
-            </Td>
-          );
-        })}
-      </Tr>
+      return {
+        key: row.key,
+        label: row.label,
+        events: row.events,
+        handCells: processedCells,
+        rowMaxPercent,
+        rowMinPercent,
+        sharePercentTotal,
+        sharePercentBet,
+        shareDisplayPercent,
+        shareShading,
+        isBetBucket,
+        isBetAggregate,
+        isCheckRow,
+        isAnyRow: false,
+      };
+    });
+
+    const betAnyIndex = processedRows.findIndex((row) => row.key === 'bet_any');
+    if (betAnyIndex >= 0) {
+      const betAnyHandCells = handDefinitions.map<HeroHandCell>((definition) => {
+        const numerator = betTotalsByHand.get(definition.key) ?? 0;
+        const denominator = handTotals.get(definition.key) ?? 0;
+        const percent = denominator > 0 ? (numerator / denominator) * 100 : 0;
+        return { key: definition.key, numerator, denominator, percent };
+      });
+      const betAnyRowMax = betAnyHandCells.reduce((max, cell) => Math.max(max, cell.percent), 0);
+      const betAnyRowMinRaw = betAnyHandCells.reduce(
+        (min, cell) => Math.min(min, cell.percent),
+        Number.POSITIVE_INFINITY,
+      );
+      const betAnyRowMin = Number.isFinite(betAnyRowMinRaw) ? betAnyRowMinRaw : 0;
+      const betAnyShare = totalEvents > 0 ? (uniqueBetEvents / totalEvents) * 100 : 0;
+
+      processedRows[betAnyIndex] = {
+        ...processedRows[betAnyIndex],
+        events: uniqueBetEvents,
+        handCells: betAnyHandCells,
+        rowMaxPercent: betAnyRowMax,
+        rowMinPercent: betAnyRowMin,
+        sharePercentTotal: betAnyShare,
+        sharePercentBet: betAnyShare,
+        shareDisplayPercent: betAnyShare,
+        shareShading: 'green',
+      };
+    }
+
+    const anyRowHandCells = handDefinitions.map<HeroHandCell>((definition) => {
+      const numerator = handTotals.get(definition.key) ?? 0;
+      const percent = totalEvents > 0 ? (numerator / totalEvents) * 100 : 0;
+      return {
+        key: definition.key,
+        numerator,
+        denominator: totalEvents,
+        percent,
+      };
+    });
+    const anyRowMax = anyRowHandCells.reduce((max, cell) => Math.max(max, cell.percent), 0);
+    const anyRowMinRaw = anyRowHandCells.reduce(
+      (min, cell) => Math.min(min, cell.percent),
+      Number.POSITIVE_INFINITY,
     );
-  });
+    const anyRowMin = Number.isFinite(anyRowMinRaw) ? anyRowMinRaw : 0;
+    const sharePercentTotalAny = totalEvents > 0 ? 100 : 0;
 
-  currentRowIndex += percentRows.length;
-  const metricRowElements = metricRows.map((row, index) => {
-    const rowIndex = currentRowIndex + index;
-    const bottom = rowIndex === lastRowIndex;
-    return (
-      <Tr key={row.key}>
-        <Th scope="row">{row.label}</Th>
-        {dataColumns.map((key) => {
-          const metric = metricMap.get(key);
-          const value = metric ? row.selector(metric) : 0;
-          const { bg, color } = deriveRowGradient(value, row.range.max, row.palette, row.range.min);
-          const props = columnOutlineProps(key, { bottom });
-          const display = key === 'check' ? '—' : metric ? value.toFixed(2) : '—';
-          return (
-            <Td key={`${row.key}-${key}`} isNumeric bg={bg} color={color} {...props}>
-              {display}
-            </Td>
-          );
-        })}
-      </Tr>
-    );
-  });
+    const anyRow: HeroHandRow = {
+      key: 'any',
+      label: 'Any',
+      events: totalEvents,
+      handCells: anyRowHandCells,
+      rowMaxPercent: anyRowMax,
+      rowMinPercent: anyRowMin,
+      sharePercentTotal: sharePercentTotalAny,
+      sharePercentBet: 0,
+      shareDisplayPercent: sharePercentTotalAny,
+      shareShading: 'none',
+      isBetBucket: false,
+      isBetAggregate: false,
+      isCheckRow: false,
+      isAnyRow: true,
+    };
+
+    const rowsWithAny = [anyRow, ...processedRows];
+
+    let purpleMax = 0;
+    let shareMaxGreen = 0;
+    let shareMaxOrange = 0;
+    let blueMax = 0;
+
+    rowsWithAny.forEach((row) => {
+      if (row.isCheckRow || row.isBetAggregate) {
+        purpleMax = Math.max(purpleMax, row.rowMaxPercent);
+      }
+      if (row.shareShading === 'green') {
+        shareMaxGreen = Math.max(shareMaxGreen, row.sharePercentTotal);
+      }
+      if (row.shareShading === 'orange') {
+        shareMaxOrange = Math.max(shareMaxOrange, row.sharePercentBet);
+      }
+      if (row.isBetBucket) {
+        row.handCells.forEach((cell) => {
+          blueMax = Math.max(blueMax, cell.percent);
+        });
+      }
+    });
+
+    return {
+      rows: rowsWithAny,
+      shareMaxNonBet: shareMaxGreen,
+      shareMaxBet: shareMaxOrange,
+      blueMax,
+      purpleRowMax: purpleMax,
+    };
+  }, [actions, actionSummaries, handDefinitions, handTotals, totalEvents, totals, showBetBuckets]);
+
+  const tableRows = heroTableMetrics.rows;
+  const shareMaxNonBet = heroTableMetrics.shareMaxNonBet;
+  const shareMaxBet = heroTableMetrics.shareMaxBet;
+  const blueMax = heroTableMetrics.blueMax;
+  const purpleRowMax = heroTableMetrics.purpleRowMax;
+
+  const handColumns = handDefinitions.map((definition) => ({
+    key: definition.key,
+    label: definition.label,
+  }));
+
+  const isHighlighted = (actionKey: string) => highlightedColumns?.has(actionKey) ?? false;
 
   return (
     <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" bg="blackAlpha.400" overflowX="auto">
-      <Table size="sm" variant="unstyled">
+      <Table size="sm" variant="unstyled" sx={{ 'th, td': { fontSize: 'xs', lineHeight: 'short' } }}>
         <Thead>
           <Tr>
-            <Th rowSpan={2} textAlign="left" borderBottom="1px solid" borderColor="whiteAlpha.300" width="220px">
-              Metric
-            </Th>
-            <Th colSpan={dataColumns.length} textAlign="center" borderBottom="1px solid" borderColor="whiteAlpha.300">
+            <Th textAlign="left" borderBottom="1px solid" borderColor="whiteAlpha.300">
               Action
             </Th>
-          </Tr>
-          <Tr>
-            {dataColumns.map((key) => {
-              const props = {
-                ...headerHighlightProps(key),
-                ...columnOutlineProps(key, { top: true }),
-              };
-              return (
-                <Th key={key} textAlign="right" borderBottom="1px solid" borderColor="whiteAlpha.300" {...props}>
-                  {columnLabels.get(key) ?? key}
-                </Th>
-              );
-            })}
+            <Th isNumeric borderBottom="1px solid" borderColor="whiteAlpha.300">
+              Share (Events)
+            </Th>
+            {handColumns.map((column) => (
+              <Th key={column.key} textAlign="left" borderBottom="1px solid" borderColor="whiteAlpha.300">
+                {column.label}
+              </Th>
+            ))}
           </Tr>
         </Thead>
         <Tbody>
-          {eventRow}
-          {percentRowElements}
-          {metricRowElements}
+          {tableRows.map((row) => {
+            const highlighted = isHighlighted(row.key);
+            const outlineProps = highlighted
+              ? { borderColor: 'purple.400', borderWidth: '1px', color: 'purple.200' }
+              : { borderColor: 'whiteAlpha.200', borderWidth: '1px' };
+            const fallbackColor = highlighted ? 'purple.200' : 'whiteAlpha.900';
+            const shareText = `${row.events.toLocaleString()} (${formatPercentage(row.shareDisplayPercent)})`;
+            const rowMax = row.rowMaxPercent || 0;
+            const rowMin = row.rowMinPercent || 0;
+            let shareBg = 'transparent';
+            let shareColor = fallbackColor;
+            if (row.shareShading === 'green') {
+              const max = shareMaxNonBet > 0 ? shareMaxNonBet : row.sharePercentTotal > 0 ? row.sharePercentTotal : 1;
+              const gradient = deriveShareColor(row.sharePercentTotal, max);
+              shareBg = gradient.bg;
+              shareColor = gradient.color;
+            } else if (row.shareShading === 'orange') {
+              const max = shareMaxBet > 0 ? shareMaxBet : row.sharePercentBet > 0 ? row.sharePercentBet : 1;
+              const gradient = deriveRowGradient(row.sharePercentBet, max, 'orange', 0);
+              shareBg = gradient.bg;
+              shareColor = gradient.color;
+            }
+            return (
+              <Tr key={row.key}>
+                <Th scope="row" color={highlighted ? 'purple.200' : 'whiteAlpha.900'}>
+                  {row.label}
+                </Th>
+                <Td isNumeric borderStyle="solid" bg={shareBg} color={shareColor} {...outlineProps}>
+                  {shareText}
+                </Td>
+                {row.handCells.map((cell) => {
+                  let cellBg = 'transparent';
+                  let cellColor = fallbackColor;
+                  if (row.isAnyRow) {
+                    const gradient = deriveRowGradientGreen(cell.percent, rowMax || 0);
+                    cellBg = gradient.bg;
+                    cellColor = gradient.color;
+                  } else if (row.isCheckRow || row.isBetAggregate) {
+                    const gradient = deriveRowGradientPurple(cell.percent, purpleRowMax || rowMax || 0);
+                    cellBg = gradient.bg;
+                    cellColor = gradient.color;
+                  } else if (row.isBetBucket) {
+                    const gradient = deriveRowGradientBlue(cell.percent, blueMax || 0);
+                    cellBg = gradient.bg;
+                    cellColor = gradient.color;
+                  }
+                  const cellText =
+                    cell.denominator > 0
+                      ? `${cell.numerator.toLocaleString()} (${formatPercentage(cell.percent)})`
+                      : '—';
+                  return (
+                    <Td
+                      key={`${row.key}-${cell.key}`}
+                      isNumeric
+                      bg={cellBg}
+                      color={cellColor}
+                      borderStyle="solid"
+                      {...outlineProps}
+                    >
+                      {cellText}
+                    </Td>
+                  );
+                })}
+              </Tr>
+            );
+          })}
         </Tbody>
       </Table>
+      <Box mt={3} px={3} py={2} borderTop="1px solid" borderColor="whiteAlpha.200" color="whiteAlpha.700" fontSize="sm">
+        {actorLabel ?? 'Selection'} actions across {totalEvents.toLocaleString()} events.
+      </Box>
     </Box>
   );
 };
+type ResponderRow =
+  | { key: 'fold' | 'call' | 'raise' | 'check'; label: string; type: 'action' }
+  | { key: 'bet_any'; label: string; type: 'aggregate' }
+  | { key: string; label: string; type: 'bucket' }
+  | { key: 'unknown'; label: string; type: 'unknown' };
 
-const HandBreakdownTable = ({
+const ResponderMatrix = ({
   bucketOrder,
-  metrics,
+  summaries,
+  totals,
   highlightedColumns,
-  groupedView,
 }: {
   bucketOrder: LineBucketMeta[];
-  metrics: LineHandMetric[];
+  summaries: Map<string, LineActionSummary>;
+  totals?: LineActionSummary;
   highlightedColumns?: Set<string>;
-  groupedView: boolean;
 }) => {
-  const bucketKeys = useMemo(
-    () => bucketOrder.map((bucket) => bucket.key).filter((key) => key !== 'check'),
-    [bucketOrder],
+  const { extended: extendedSummaries, nonCheckKeys } = useMemo(
+    () => buildExtendedActionSummaries(bucketOrder, summaries),
+    [bucketOrder, summaries],
   );
-  const dataColumns = useMemo(() => ['check', ...bucketKeys], [bucketKeys]);
-  const columnLabels = useMemo(() => {
-    const map = new Map<string, string>();
-    map.set('check', 'Check');
+
+  const columns = useMemo(() => {
+    const items: Array<{ key: string; label: string }> = [{ key: 'check', label: 'Check' }];
+    if (nonCheckKeys.length > 0) {
+      items.push({ key: 'bet_any', label: 'Bet (Any)' });
+    }
     bucketOrder.forEach((bucket) => {
-      map.set(bucket.key, bucket.label);
+      if (bucket.key === 'check') {
+        return;
+      }
+      items.push({ key: bucket.key, label: bucket.label });
+    });
+    return items;
+  }, [bucketOrder, nonCheckKeys.length]);
+
+  const columnSummaries = useMemo(() => {
+    const map = new Map<string, LineActionSummary>();
+    columns.forEach((column) => {
+      const summary = extendedSummaries.get(column.key) ?? createEmptyActionSummary(column.key, column.label);
+      map.set(column.key, summary);
     });
     return map;
-  }, [bucketOrder]);
+  }, [columns, extendedSummaries]);
 
-  const metricMap = useMemo(() => {
-    const map = new Map<string, LineHandMetric>();
-    metrics.forEach((metric) => map.set(metric.bucket_key, metric));
-    return map;
-  }, [metrics]);
-
-  const maxEvents = useMemo(
-    () => dataColumns.reduce((max, key) => Math.max(max, metricMap.get(key)?.events ?? 0), 0),
-    [dataColumns, metricMap],
-  );
-
-  const definitions = groupedView ? HAND_GROUP_DEFINITIONS : HAND_TYPE_DEFINITIONS;
-
-  const { rows, columnMax } = useMemo(() => {
-    const resultColumnMax: Record<string, number> = {};
-    dataColumns.forEach((key) => {
-      resultColumnMax[key] = 0;
+  const responderRows = useMemo<ResponderRow[]>(() => {
+    const base: ResponderRow[] = [
+      { key: 'fold', label: 'Fold', type: 'action' },
+      { key: 'call', label: 'Call', type: 'action' },
+      { key: 'raise', label: 'Raise', type: 'action' },
+    ];
+    if (nonCheckKeys.length > 0) {
+      base.push({ key: 'bet_any', label: 'Bet (Any)', type: 'aggregate' });
+    }
+    nonCheckKeys.forEach((key) => {
+      const bucket = bucketOrder.find((entry) => entry.key === key);
+      if (!bucket) {
+        return;
+      }
+      base.push({ key, label: bucket.label, type: 'bucket' });
     });
+    base.push({ key: 'check', label: 'Check', type: 'action' });
+    base.push({ key: 'unknown', label: 'Unknown', type: 'unknown' });
+    return base;
+  }, [bucketOrder, nonCheckKeys.length]);
 
-    const computedRows = definitions.map((definition) => {
-      const values = dataColumns.map((key) => {
-        const metric = metricMap.get(key);
-        const events = metric?.events ?? 0;
-        const count = definition.members.reduce((total, member) => total + (metric?.categories?.[member] ?? 0), 0);
-        const percent = events > 0 ? (count / events) * 100 : 0;
-        resultColumnMax[key] = Math.max(resultColumnMax[key], percent);
-        return { bucketKey: key, events, count, percent };
-      });
-      return { key: definition.key, label: definition.label, values };
+  const responsesByColumn = useMemo(() => {
+    const counts = new Map<string, number>();
+    columns.forEach((column) => {
+      counts.set(column.key, columnSummaries.get(column.key)?.responder_summary.total_responses ?? 0);
     });
+    return counts;
+  }, [columns, columnSummaries]);
 
-    return { rows: computedRows, columnMax: resultColumnMax };
-  }, [dataColumns, definitions, metricMap]);
+  const maxResponseCount = useMemo(() => {
+    const values = Array.from(responsesByColumn.values());
+    return values.length > 0 ? Math.max(...values) : 0;
+  }, [responsesByColumn]);
 
-  const outlineColor = 'rgba(128, 90, 213, 0.65)';
-  const isHighlighted = (key: string) => highlightedColumns?.has(key) ?? false;
-  const headerHighlightProps = (key: string) => (isHighlighted(key) ? { color: 'purple.200', fontWeight: 'semibold' } : {});
-  const columnOutlineProps = (key: string, { top = false, bottom = false }: { top?: boolean; bottom?: boolean }) =>
-    isHighlighted(key)
-      ? {
-          borderLeft: `2px solid ${outlineColor}`,
-          borderRight: `2px solid ${outlineColor}`,
-          ...(top
-            ? {
-                borderTop: `2px solid ${outlineColor}`,
-                borderTopLeftRadius: 'md',
-                borderTopRightRadius: 'md',
-              }
-            : {}),
-          ...(bottom
-            ? {
-                borderBottom: `2px solid ${outlineColor}`,
-                borderBottomLeftRadius: 'md',
-                borderBottomRightRadius: 'md',
-              }
-            : {}),
-          position: 'relative' as const,
-          zIndex: 1,
+  const getResponderCountForRow = (row: ResponderRow, summary: LineActionSummary): number => {
+    const responder = summary.responder_summary;
+    if (row.type === 'action') {
+      return responder.action_counts[row.key] ?? 0;
+    }
+    if (row.type === 'aggregate') {
+      return responder.action_counts.bet ?? 0;
+    }
+    if (row.type === 'bucket') {
+      return bucketSources(row.key).reduce(
+        (accumulator, sourceKey) => accumulator + (responder.bet_bucket_counts?.[sourceKey] ?? 0),
+        0,
+      );
+    }
+    const counts = responder.action_counts ?? {};
+    const known =
+      (counts.fold ?? 0) +
+      (counts.call ?? 0) +
+      (counts.raise ?? 0) +
+      (counts.bet ?? 0) +
+      (counts.check ?? 0);
+    const remainder = responder.total_responses - known;
+    return remainder > 0 ? remainder : 0;
+  };
+
+  const columnMax = useMemo(() => {
+    const record: Record<string, number> = {};
+    columns.forEach((column) => {
+      record[column.key] = 0;
+    });
+    responderRows.forEach((row) => {
+      columns.forEach((column) => {
+        const summary = columnSummaries.get(column.key) ?? createEmptyActionSummary(column.key, column.label);
+        const total = summary.responder_summary.total_responses || 0;
+        const count = getResponderCountForRow(row, summary);
+        const percent = total > 0 ? (count / total) * 100 : 0;
+        if (percent > record[column.key]) {
+          record[column.key] = percent;
         }
-      : {};
+      });
+    });
+    return record;
+  }, [columns, columnSummaries, responderRows]);
 
-  const totalRows = rows.length + 1;
-  const lastRowIndex = totalRows - 1;
+  const isHighlighted = (key: string) => highlightedColumns?.has(key) ?? false;
+  const outlineProps = (key: string) =>
+    isHighlighted(key)
+      ? { borderColor: 'purple.400', borderWidth: '1px' }
+      : { borderColor: 'whiteAlpha.200', borderWidth: '1px' };
 
-  const eventRow = (
-    <Tr key="hand-events">
-      <Th scope="row">Event Count</Th>
-      {dataColumns.map((key) => {
-        const value = metricMap.get(key)?.events ?? 0;
-        const { bg, color } = deriveCountColor(value, maxEvents);
-        const props = columnOutlineProps(key, { top: true, bottom: rows.length === 0 });
-        return (
-          <Td key={`hand-events-${key}`} isNumeric fontWeight="semibold" bg={bg} color={color} {...props}>
-            {value.toLocaleString()}
-          </Td>
-        );
-      })}
-    </Tr>
-  );
-
-  const categoryRows = rows.map((row, index) => {
-    const rowIndex = index + 1;
-    const bottom = rowIndex === lastRowIndex;
-    return (
-      <Tr key={row.key}>
-        <Th scope="row">{row.label}</Th>
-        {row.values.map((value) => {
-          const { bg, color } = derivePercentColor(value.percent, columnMax[value.bucketKey] ?? 0);
-          const props = columnOutlineProps(value.bucketKey, { bottom });
-          const display = value.bucketKey === 'check' ? '—' : value.events > 0 ? `${value.percent.toFixed(1)}%` : '—';
-          return (
-            <Td key={`${row.key}-${value.bucketKey}`} isNumeric bg={bg} color={color} {...props}>
-              {display}
-            </Td>
-          );
-        })}
-      </Tr>
-    );
-  });
+  const totalResponses = useMemo(() => {
+    if (totals?.responder_summary.total_responses != null) {
+      return totals.responder_summary.total_responses;
+    }
+    const values = Array.from(responsesByColumn.values());
+    return values.reduce((accumulator, value) => accumulator + value, 0);
+  }, [responsesByColumn, totals]);
 
   return (
     <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" bg="blackAlpha.400" overflowX="auto">
-      <Table size="sm" variant="unstyled">
+      <Table size="sm" variant="unstyled" sx={{ 'th, td': { fontSize: 'xs', lineHeight: 'short' } }}>
         <Thead>
           <Tr>
-            <Th rowSpan={2} textAlign="left" borderBottom="1px solid" borderColor="whiteAlpha.300" width="220px">
-              Hand Type
+            <Th textAlign="left" borderBottom="1px solid" borderColor="whiteAlpha.300">
+              Responder Action
             </Th>
-            <Th colSpan={dataColumns.length} textAlign="center" borderBottom="1px solid" borderColor="whiteAlpha.300">
-              Action
-            </Th>
-          </Tr>
-          <Tr>
-            {dataColumns.map((key) => {
-              const props = {
-                ...headerHighlightProps(key),
-                ...columnOutlineProps(key, { top: true }),
-              };
-              return (
-                <Th key={key} textAlign="right" borderBottom="1px solid" borderColor="whiteAlpha.300" {...props}>
-                  {columnLabels.get(key) ?? key}
-                </Th>
-              );
-            })}
+            {columns.map((column) => (
+              <Th
+                key={column.key}
+                textAlign="right"
+                borderBottom="1px solid"
+                borderColor={isHighlighted(column.key) ? 'purple.400' : 'whiteAlpha.300'}
+                color={isHighlighted(column.key) ? 'purple.200' : 'whiteAlpha.800'}
+              >
+                {column.label}
+              </Th>
+            ))}
           </Tr>
         </Thead>
         <Tbody>
-          {eventRow}
-          {categoryRows}
+          <Tr>
+            <Th scope="row">Responses</Th>
+            {columns.map((column) => {
+              const value = responsesByColumn.get(column.key) ?? 0;
+              const { bg, color } = deriveShareColor(value, maxResponseCount || 1);
+              return (
+                <Td key={`resp-${column.key}`} isNumeric bg={bg} color={color} borderStyle="solid" {...outlineProps(column.key)}>
+                  {value.toLocaleString()}
+                </Td>
+              );
+            })}
+          </Tr>
+          {responderRows.map((row) => (
+            <Tr key={row.key}>
+              <Th scope="row">{row.label}</Th>
+              {columns.map((column) => {
+                const summary = columnSummaries.get(column.key) ?? createEmptyActionSummary(column.key, column.label);
+                const total = summary.responder_summary.total_responses || 0;
+                const count = getResponderCountForRow(row, summary);
+                const percent = total > 0 ? (count / total) * 100 : 0;
+                const maxPercent = columnMax[column.key] || 100;
+                const { bg, color } = derivePercentColor(percent, maxPercent);
+                const cellText = total > 0 ? `${count.toLocaleString()} (${formatPercentage(percent)})` : '—';
+                return (
+                  <Td key={`${row.key}-${column.key}`} isNumeric bg={bg} color={color} borderStyle="solid" {...outlineProps(column.key)}>
+                    {cellText}
+                  </Td>
+                );
+              })}
+            </Tr>
+          ))}
         </Tbody>
       </Table>
+      <Box mt={3} px={3} py={2} borderTop="1px solid" borderColor="whiteAlpha.200" color="whiteAlpha.700" fontSize="sm">
+        Based on {totalResponses.toLocaleString()} behind-player responses.
+      </Box>
     </Box>
   );
 };

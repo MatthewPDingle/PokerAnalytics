@@ -13,6 +13,8 @@ export type ResponderHandScenario = {
   position: 'IP' | 'OOP';
   playerCount: number;
   responseType: 'call' | 'raise';
+  textureKey: string;
+  preflopKey: string;
   metrics: ResponderHandMetric[];
 };
 
@@ -35,12 +37,16 @@ type RawResponderPayload = {
   hero_positions: string[];
   player_counts: number[];
   response_types: Array<{ key: string; label: string }>;
+  textures: Array<{ key: string; label: string }>;
+  preflop_categories: Array<{ key: string; label: string }>;
   scenarios: Array<{
     hero_position: string;
     bet_type: string;
     position: 'IP' | 'OOP';
     player_count: number;
     response_type: 'call' | 'raise';
+    texture_key: string;
+    preflop_key: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -60,6 +66,8 @@ type ResponderMatrixState = {
   heroPositions: string[];
   playerCounts: number[];
   responseTypes: Array<{ key: string; label: string }>;
+  textures: Array<{ key: string; label: string }>;
+  preflopOptions: Array<{ key: string; label: string }>;
   loading: boolean;
   error: string | null;
   usingSample: boolean;
@@ -71,9 +79,7 @@ const SAMPLE_BUCKETS = [
   { key: 'pct_40_60', label: '40-60%' },
   { key: 'pct_60_80', label: '60-80%' },
   { key: 'pct_80_100', label: '80-100%' },
-  { key: 'pct_100_125', label: '100-125%' },
-  { key: 'pct_125_200', label: '125-200%' },
-  { key: 'pct_125_plus', label: '125%+' },
+  { key: 'pct_100_plus', label: '100%+' },
   { key: 'all_in', label: 'All-In' },
   { key: 'one_bb', label: '1 BB' },
 ];
@@ -115,6 +121,8 @@ const SAMPLE_SCENARIOS: ResponderHandScenario[] = [
     position: 'IP',
     playerCount: 2,
     responseType: 'call',
+    textureKey: 'any',
+    preflopKey: 'any',
     metrics: SAMPLE_BUCKETS.map((bucket) => ({
       bucketKey: bucket.key,
       bucketLabel: bucket.label,
@@ -136,6 +144,8 @@ const SAMPLE_SCENARIOS: ResponderHandScenario[] = [
     position: 'IP',
     playerCount: 2,
     responseType: 'raise',
+    textureKey: 'any',
+    preflopKey: 'any',
     metrics: SAMPLE_BUCKETS.map((bucket) => ({
       bucketKey: bucket.key,
       bucketLabel: bucket.label,
@@ -168,6 +178,8 @@ const INITIAL_STATE: ResponderMatrixState = {
   heroPositions: [],
   playerCounts: [],
   responseTypes: [],
+  textures: [],
+  preflopOptions: [],
   loading: true,
   error: null,
   usingSample: false,
@@ -189,6 +201,16 @@ const SAMPLE_STATE: ResponderMatrixState = {
   heroPositions: ['SB', 'BB', 'UTG', 'BTN'],
   playerCounts: [2, 3],
   responseTypes: SAMPLE_RESPONSE_TYPES,
+  textures: [
+    { key: 'any', label: 'All Textures' },
+    { key: 'rainbow', label: 'Rainbow Flops' },
+  ],
+  preflopOptions: [
+    { key: 'any', label: 'All Preflop Pots' },
+    { key: 'limped', label: 'Limped Pot (No Raise)' },
+    { key: 'single_raise', label: 'Single-Raise Pot' },
+    { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+  ],
   loading: false,
   error: 'Using sample responder hand matrix data (API unavailable).',
   usingSample: true,
@@ -201,6 +223,8 @@ const transformPayload = (payload: RawResponderPayload): ResponderMatrixState =>
     position: scenario.position,
     playerCount: scenario.player_count,
     responseType: scenario.response_type,
+    textureKey: scenario.texture_key,
+    preflopKey: scenario.preflop_key,
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,
@@ -219,6 +243,18 @@ const transformPayload = (payload: RawResponderPayload): ResponderMatrixState =>
   heroPositions: payload.hero_positions,
   playerCounts: payload.player_counts,
   responseTypes: payload.response_types,
+  textures:
+    payload.textures ?? [
+      { key: 'any', label: 'All Textures' },
+      { key: 'rainbow', label: 'Rainbow Flops' },
+    ],
+  preflopOptions:
+    payload.preflop_categories ?? [
+      { key: 'any', label: 'All Preflop Pots' },
+      { key: 'limped', label: 'Limped Pot (No Raise)' },
+      { key: 'single_raise', label: 'Single-Raise Pot' },
+      { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+    ],
   loading: false,
   error: null,
   usingSample: false,

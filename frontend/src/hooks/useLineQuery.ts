@@ -26,9 +26,26 @@ export type LineBucketMeta = {
   label: string;
 };
 
-export type LineResponseMetric = {
-  bucket_key: string;
-  bucket_label: string;
+export type LineResponderSeatSummary = {
+  seat_label: string;
+  responses: number;
+  action_counts: Record<string, number>;
+  hand_categories: Record<string, number>;
+  bet_bucket_counts: Record<string, number>;
+  relative_positions: Record<string, number>;
+};
+
+export type LineResponderSummary = {
+  total_responses: number;
+  action_counts: Record<string, number>;
+  hand_categories: Record<string, number>;
+  bet_bucket_counts: Record<string, number>;
+  seats: LineResponderSeatSummary[];
+};
+
+export type LineActionSummary = {
+  action_key: string | null;
+  action_label: string | null;
   events: number;
   fold_events: number;
   call_events: number;
@@ -43,13 +60,9 @@ export type LineResponseMetric = {
   avg_added_flop_bb: number;
   avg_added_all_bb: number;
   avg_share_all: number;
-};
-
-export type LineHandMetric = {
-  bucket_key: string;
-  bucket_label: string;
-  events: number;
-  categories: Record<string, number>;
+  hand_categories: Record<string, number>;
+  responder_summary: LineResponderSummary;
+  hero_actions: Record<string, number>;
 };
 
 export type LineQueryResponse = {
@@ -76,8 +89,8 @@ export type LineQueryResponse = {
     allowed: number[] | null;
   };
   bucket_order: LineBucketMeta[];
-  response_metrics: LineResponseMetric[];
-  hand_metrics: LineHandMetric[];
+  action_summaries: LineActionSummary[];
+  totals: LineActionSummary;
   context: {
     total_events: number;
     applied_filters: Record<string, unknown>;
@@ -109,17 +122,246 @@ const SAMPLE_BUCKETS: LineBucketMeta[] = [
   { key: 'pct_40_60', label: '40-60%' },
   { key: 'pct_60_80', label: '60-80%' },
   { key: 'pct_80_100', label: '80-100%' },
-  { key: 'pct_100_125', label: '100-125%' },
-  { key: 'pct_125_200', label: '125-200%' },
-  { key: 'pct_200_300', label: '200-300%' },
-  { key: 'pct_300_plus', label: '300%+' },
-  { key: 'pct_125_plus', label: '125%+' },
+  { key: 'pct_100_plus', label: '100%+' },
   { key: 'all_in', label: 'All-In' },
   { key: 'one_bb', label: '1 BB' },
 ];
 
+const RESPONDER_ACTION_KEYS = ['check', 'bet', 'call', 'raise', 'fold'] as const;
+
+const createEmptyActionCounts = (): Record<string, number> =>
+  RESPONDER_ACTION_KEYS.reduce<Record<string, number>>((accumulator, key) => {
+    accumulator[key] = 0;
+    return accumulator;
+  }, {});
+
+const mergeCounts = (target: Record<string, number>, source?: Partial<Record<string, number>>): void => {
+  if (!source) {
+    return;
+  }
+  Object.entries(source).forEach(([key, value]) => {
+    if (value === undefined) {
+      return;
+    }
+    target[key] = (target[key] ?? 0) + value;
+  });
+};
+
+const createEmptySeatSummary = (seatLabel: string): LineResponderSeatSummary => ({
+  seat_label: seatLabel,
+  responses: 0,
+  action_counts: createEmptyActionCounts(),
+  hand_categories: {},
+  bet_bucket_counts: {},
+  relative_positions: {},
+});
+
+const emptyResponderSummary = (): LineResponderSummary => ({
+  total_responses: 0,
+  action_counts: createEmptyActionCounts(),
+  hand_categories: {},
+  bet_bucket_counts: {},
+  seats: [],
+});
+
+type SampleResponderSeatInput = {
+  seat_label: string;
+  responses: number;
+  action_counts?: Partial<Record<string, number>>;
+  hand_categories?: Record<string, number>;
+  bet_bucket_counts?: Record<string, number>;
+  relative_positions?: Record<string, number>;
+};
+
+type SampleResponderInput = {
+  totalResponses: number;
+  actionCounts?: Partial<Record<string, number>>;
+  handCategories?: Record<string, number>;
+  betBucketCounts?: Record<string, number>;
+  seats?: SampleResponderSeatInput[];
+};
+
+const createResponderSummary = (input: SampleResponderInput): LineResponderSummary => {
+  const summary = emptyResponderSummary();
+  summary.total_responses = input.totalResponses;
+  mergeCounts(summary.action_counts, input.actionCounts);
+  summary.hand_categories = { ...(input.handCategories ?? {}) };
+  summary.bet_bucket_counts = { ...(input.betBucketCounts ?? {}) };
+  summary.seats = (input.seats ?? []).map((seat) => {
+    const entry = createEmptySeatSummary(seat.seat_label);
+    entry.responses = seat.responses;
+    mergeCounts(entry.action_counts, seat.action_counts);
+    entry.hand_categories = { ...(seat.hand_categories ?? {}) };
+    entry.bet_bucket_counts = { ...(seat.bet_bucket_counts ?? {}) };
+    entry.relative_positions = { ...(seat.relative_positions ?? {}) };
+    return entry;
+  });
+  return summary;
+};
+
+type SampleActionInput = {
+  key: string;
+  label: string;
+  events: number;
+  foldEvents: number;
+  callEvents: number;
+  raiseEvents: number;
+  avgRatio: number;
+  avgBet: number;
+  avgAddedFlop: number;
+  avgAddedAll: number;
+  avgShare: number;
+  handCategories: Record<string, number>;
+  responderSummary: LineResponderSummary;
+  heroActions: Record<string, number>;
+};
+
+const buildActionSummary = ({
+  key,
+  label,
+  events,
+  foldEvents,
+  callEvents,
+  raiseEvents,
+  avgRatio,
+  avgBet,
+  avgAddedFlop,
+  avgAddedAll,
+  avgShare,
+  handCategories,
+  responderSummary,
+  heroActions,
+}: SampleActionInput): LineActionSummary => {
+  const continueEvents = callEvents + raiseEvents;
+  return {
+    action_key: key,
+    action_label: label,
+    events,
+    fold_events: foldEvents,
+    call_events: callEvents,
+    raise_events: raiseEvents,
+    continue_events: continueEvents,
+    fold_pct: events ? (foldEvents / events) * 100 : 0,
+    call_pct: events ? (callEvents / events) * 100 : 0,
+    raise_pct: events ? (raiseEvents / events) * 100 : 0,
+    continue_pct: events ? (continueEvents / events) * 100 : 0,
+    avg_ratio: avgRatio,
+    avg_bet_bb: avgBet,
+    avg_added_flop_bb: avgAddedFlop,
+    avg_added_all_bb: avgAddedAll,
+    avg_share_all: avgShare,
+    hand_categories: handCategories,
+    responder_summary: responderSummary,
+    hero_actions: heroActions,
+  };
+};
+
+const buildSampleTotals = (summaries: LineActionSummary[]): LineActionSummary => {
+  let events = 0;
+  let foldEvents = 0;
+  let callEvents = 0;
+  let raiseEvents = 0;
+  let ratioSum = 0;
+  let betSum = 0;
+  let addedFlopSum = 0;
+  let addedAllSum = 0;
+  let shareSum = 0;
+
+  const handTotals: Record<string, number> = {};
+  const responderHandTotals: Record<string, number> = {};
+  const responderBucketTotals: Record<string, number> = {};
+  const responderActionTotals = createEmptyActionCounts();
+  let responderResponses = 0;
+  const seatAccumulator = new Map<string, LineResponderSeatSummary>();
+  const heroActionTotals: Record<string, number> = {};
+
+  summaries.forEach((summary) => {
+    events += summary.events;
+    foldEvents += summary.fold_events;
+    callEvents += summary.call_events;
+    raiseEvents += summary.raise_events;
+
+    ratioSum += summary.avg_ratio * summary.events;
+    betSum += summary.avg_bet_bb * summary.events;
+    addedFlopSum += summary.avg_added_flop_bb * summary.events;
+    addedAllSum += summary.avg_added_all_bb * summary.events;
+    shareSum += summary.avg_share_all * summary.events;
+
+    mergeCounts(handTotals, summary.hand_categories);
+
+    const responder = summary.responder_summary;
+    responderResponses += responder.total_responses;
+    mergeCounts(responderActionTotals, responder.action_counts);
+    mergeCounts(responderHandTotals, responder.hand_categories);
+    mergeCounts(responderBucketTotals, responder.bet_bucket_counts);
+    mergeCounts(heroActionTotals, summary.hero_actions);
+
+    responder.seats.forEach((seat) => {
+      const existing = seatAccumulator.get(seat.seat_label) ?? createEmptySeatSummary(seat.seat_label);
+      existing.responses += seat.responses;
+      mergeCounts(existing.action_counts, seat.action_counts);
+      mergeCounts(existing.hand_categories, seat.hand_categories);
+      mergeCounts(existing.bet_bucket_counts, seat.bet_bucket_counts);
+      mergeCounts(existing.relative_positions, seat.relative_positions);
+      seatAccumulator.set(seat.seat_label, existing);
+    });
+  });
+
+  const continueEvents = callEvents + raiseEvents;
+  const average = (value: number) => (events ? value / events : 0);
+
+  return {
+    action_key: 'all',
+    action_label: 'All Actions',
+    events,
+    fold_events: foldEvents,
+    call_events: callEvents,
+    raise_events: raiseEvents,
+    continue_events: continueEvents,
+    fold_pct: events ? (foldEvents / events) * 100 : 0,
+    call_pct: events ? (callEvents / events) * 100 : 0,
+    raise_pct: events ? (raiseEvents / events) * 100 : 0,
+    continue_pct: events ? (continueEvents / events) * 100 : 0,
+    avg_ratio: average(ratioSum),
+    avg_bet_bb: average(betSum),
+    avg_added_flop_bb: average(addedFlopSum),
+    avg_added_all_bb: average(addedAllSum),
+    avg_share_all: average(shareSum),
+    hand_categories: handTotals,
+    responder_summary: {
+      total_responses: responderResponses,
+      action_counts: responderActionTotals,
+      hand_categories: responderHandTotals,
+      bet_bucket_counts: responderBucketTotals,
+      seats: Array.from(seatAccumulator.values()).sort((a, b) => a.seat_label.localeCompare(b.seat_label)),
+    },
+    hero_actions: heroActionTotals,
+  };
+};
+
+const SAMPLE_ACTION_SUMMARIES: LineActionSummary[] = SAMPLE_BUCKETS.map((bucket) =>
+  buildActionSummary({
+    key: bucket.key,
+    label: bucket.label,
+    events: 0,
+    foldEvents: 0,
+    callEvents: 0,
+    raiseEvents: 0,
+    avgRatio: 0,
+    avgBet: 0,
+    avgAddedFlop: 0,
+    avgAddedAll: 0,
+  avgShare: 0,
+  handCategories: {},
+  responderSummary: emptyResponderSummary(),
+  heroActions: {},
+}),
+);
+
+const SAMPLE_TOTALS = buildSampleTotals(SAMPLE_ACTION_SUMMARIES);
+
 const SAMPLE_RESPONSE: LineQueryResponse = {
-  version: 2,
+  version: 5,
   descriptor: {
     steps: [
       { street: 'flop', actor: 'bettor', action: 'cbet', qualifiers: ['out_of_position'] },
@@ -139,156 +381,18 @@ const SAMPLE_RESPONSE: LineQueryResponse = {
     allowed: [0.1],
   },
   bucket_order: SAMPLE_BUCKETS,
-  response_metrics: SAMPLE_BUCKETS.map((bucket) => {
-    if (bucket.key === 'pct_40_60') {
-      return {
-        bucket_key: bucket.key,
-        bucket_label: bucket.label,
-        events: 48,
-        fold_events: 18,
-        call_events: 24,
-        raise_events: 6,
-        continue_events: 30,
-        fold_pct: 37.5,
-        call_pct: 50.0,
-        raise_pct: 12.5,
-        continue_pct: 62.5,
-        avg_ratio: 0.52,
-        avg_bet_bb: 5.6,
-        avg_added_flop_bb: 1.3,
-        avg_added_all_bb: 4.8,
-        avg_share_all: 1.9,
-      };
-    }
-    if (bucket.key === 'pct_25_40') {
-      return {
-        bucket_key: bucket.key,
-        bucket_label: bucket.label,
-        events: 28,
-        fold_events: 8,
-        call_events: 16,
-        raise_events: 4,
-        continue_events: 20,
-        fold_pct: 28.6,
-        call_pct: 57.1,
-        raise_pct: 14.3,
-        continue_pct: 71.4,
-        avg_ratio: 0.34,
-        avg_bet_bb: 3.8,
-        avg_added_flop_bb: 1.1,
-        avg_added_all_bb: 3.2,
-        avg_share_all: 1.6,
-      };
-    }
-    return {
-      bucket_key: bucket.key,
-      bucket_label: bucket.label,
-      events: 0,
-      fold_events: 0,
-      call_events: 0,
-      raise_events: 0,
-      continue_events: 0,
-      fold_pct: 0,
-      call_pct: 0,
-      raise_pct: 0,
-      continue_pct: 0,
-      avg_ratio: 0,
-      avg_bet_bb: 0,
-      avg_added_flop_bb: 0,
-      avg_added_all_bb: 0,
-      avg_share_all: 0,
-    };
-  }),
-  hand_metrics: SAMPLE_BUCKETS.map((bucket) => {
-    if (bucket.key === 'pct_40_60') {
-      return {
-        bucket_key: bucket.key,
-        bucket_label: bucket.label,
-        events: 48,
-        categories: {
-          Air: 14,
-          'Underpair': 3,
-          'Bottom Pair': 4,
-          'Middle Pair': 6,
-          'Top Pair': 10,
-          Overpair: 2,
-          'Two Pair': 3,
-          'Trips/Set': 2,
-          Straight: 1,
-          Flush: 0,
-          'Full House': 1,
-          Quads: 0,
-          'Flush Draw': 9,
-          'OESD/DG': 7,
-        },
-      };
-    }
-    if (bucket.key === 'pct_25_40') {
-      return {
-        bucket_key: bucket.key,
-        bucket_label: bucket.label,
-        events: 28,
-        categories: {
-          Air: 6,
-          'Underpair': 2,
-          'Bottom Pair': 3,
-          'Middle Pair': 5,
-          'Top Pair': 7,
-          Overpair: 1,
-          'Two Pair': 2,
-          'Trips/Set': 1,
-          Straight: 1,
-          Flush: 0,
-          'Full House': 0,
-          Quads: 0,
-          'Flush Draw': 5,
-          'OESD/DG': 4,
-        },
-      };
-    }
-    return {
-      bucket_key: bucket.key,
-      bucket_label: bucket.label,
-      events: 0,
-      categories: {
-        Air: 0,
-        'Underpair': 0,
-        'Bottom Pair': 0,
-        'Middle Pair': 0,
-        'Top Pair': 0,
-        Overpair: 0,
-        'Two Pair': 0,
-        'Trips/Set': 0,
-        Straight: 0,
-        Flush: 0,
-        'Full House': 0,
-        Quads: 0,
-        'Flush Draw': 0,
-        'OESD/DG': 0,
-      },
-    };
-  }),
+  action_summaries: SAMPLE_ACTION_SUMMARIES,
+  totals: SAMPLE_TOTALS,
   context: {
-    total_events: 76,
-    applied_filters: {
-      response_types: ['call'],
-      positions: ['OOP'],
-      bucket_keys: ['pct_40_60'],
-      exclude_hero: true,
-    },
-    distributions: {
-      line_keys: [
-        { key: 'xc_turn_b', count: 48 },
-        { key: 'c_turn_b', count: 28 },
-      ],
-    },
+    total_events: 0,
+    applied_filters: {},
+    distributions: {},
   },
   fingerprint: 'sample',
   descriptor_fingerprint: 'sample-descriptor',
   request_filters: { excludeHero: true },
   using_sample: true,
 };
-
 const cloneSampleResponse = (): LineQueryResponse => JSON.parse(JSON.stringify(SAMPLE_RESPONSE));
 
 export const useLineQuery = (descriptor: LineQueryRequest | null) => {

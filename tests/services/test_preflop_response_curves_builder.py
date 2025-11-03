@@ -143,7 +143,7 @@ class ResponseCurveBuilderTests(unittest.TestCase):
         self.assertTrue(lj_scenarios, "missing LJ open scenario")
         self.assertTrue(lj_scenarios[0].players_behind > 0)
         lj_points = lj_scenarios[0].points
-        self.assertTrue(any(point.bucket_key == "pct_125_200" for point in lj_points))
+        self.assertTrue(any(point.bucket_key == "pct_100_plus" for point in lj_points))
         self.assertIn(lj_scenarios[0].stack_bucket_key, {"bb_60_100", "bb_100_plus"})
 
         btn_scenarios = [s for s in scenarios if s.hero_position == "BTN" and s.situation_key == "facing_raise_with_callers"]

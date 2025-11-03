@@ -14,6 +14,8 @@ export type PotScenario = {
   betType: string;
   position: 'IP' | 'OOP';
   playerCount: number;
+  textureKey: string;
+  preflopKey: string;
   metrics: PotMetric[];
 };
 
@@ -24,11 +26,15 @@ type RawPayload = {
   positions: SelectOption[];
   player_counts: number[];
   hero_positions: string[];
+  textures: SelectOption[];
+  preflop_categories: SelectOption[];
   scenarios: Array<{
     hero_position: string;
     bet_type: string;
     position: 'IP' | 'OOP';
     player_count: number;
+    texture_key: string;
+    preflop_key: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -45,6 +51,8 @@ type HookState = {
   positions: SelectOption[];
   heroPositions: string[];
   playerCounts: number[];
+  textures: SelectOption[];
+  preflopOptions: SelectOption[];
   loading: boolean;
   error: string | null;
   usingSample: boolean;
@@ -56,9 +64,7 @@ const SAMPLE_BUCKETS: FlopBucketMeta[] = [
   { key: 'pct_40_60', label: '40-60%' },
   { key: 'pct_60_80', label: '60-80%' },
   { key: 'pct_80_100', label: '80-100%' },
-  { key: 'pct_100_125', label: '100-125%' },
-  { key: 'pct_125_200', label: '125-200%' },
-  { key: 'pct_125_plus', label: '125%+' },
+  { key: 'pct_100_plus', label: '100%+' },
   { key: 'all_in', label: 'All-In' },
   { key: 'one_bb', label: '1 BB' },
 ];
@@ -69,6 +75,8 @@ const SAMPLE_SCENARIOS: PotScenario[] = [
     betType: 'cbet',
     position: 'IP',
     playerCount: 2,
+    textureKey: 'any',
+    preflopKey: 'any',
     metrics: SAMPLE_BUCKETS.map((bucket, index) => ({
       bucketKey: bucket.key,
       bucketLabel: bucket.label,
@@ -95,6 +103,8 @@ const INITIAL_STATE: HookState = {
   positions: [],
   heroPositions: [],
   playerCounts: [],
+  textures: [],
+  preflopOptions: [],
   loading: true,
   error: null,
   usingSample: false,
@@ -106,6 +116,8 @@ const transform = (payload: RawPayload): HookState => {
     betType: scenario.bet_type,
     position: scenario.position,
     playerCount: scenario.player_count,
+    textureKey: scenario.texture_key,
+    preflopKey: scenario.preflop_key,
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,
@@ -121,6 +133,18 @@ const transform = (payload: RawPayload): HookState => {
     positions: payload.positions,
     heroPositions: payload.hero_positions,
     playerCounts: payload.player_counts,
+    textures:
+      payload.textures ?? [
+        { key: 'any', label: 'All Textures' },
+        { key: 'rainbow', label: 'Rainbow Flops' },
+      ],
+    preflopOptions:
+      payload.preflop_categories ?? [
+        { key: 'any', label: 'All Preflop Pots' },
+        { key: 'limped', label: 'Limped Pot (No Raise)' },
+        { key: 'single_raise', label: 'Single-Raise Pot' },
+        { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+      ],
     loading: false,
     error: null,
     usingSample: false,
@@ -152,6 +176,16 @@ const useFlopPotContribution = (): HookState => {
             positions: SAMPLE_POSITIONS,
             heroPositions: ['BTN'],
             playerCounts: [2],
+            textures: [
+              { key: 'any', label: 'All Textures' },
+              { key: 'rainbow', label: 'Rainbow Flops' },
+            ],
+            preflopOptions: [
+              { key: 'any', label: 'All Preflop Pots' },
+              { key: 'limped', label: 'Limped Pot (No Raise)' },
+              { key: 'single_raise', label: 'Single-Raise Pot' },
+              { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+            ],
             loading: false,
             error: 'Unable to load pot contribution data. Displaying sample values.',
             usingSample: true,

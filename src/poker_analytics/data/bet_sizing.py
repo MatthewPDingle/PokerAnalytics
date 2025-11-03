@@ -37,10 +37,7 @@ BET_SIZE_BUCKETS: Sequence[BetSizeBucket] = (
     BetSizeBucket(key="pct_40_60", label="40-60%", lower=0.40, upper=0.60),
     BetSizeBucket(key="pct_60_80", label="60-80%", lower=0.60, upper=0.80),
     BetSizeBucket(key="pct_80_100", label="80-100%", lower=0.80, upper=1.00),
-    BetSizeBucket(key="pct_100_125", label="100-125%", lower=1.00, upper=1.25),
-    BetSizeBucket(key="pct_125_200", label="125-200%", lower=1.25, upper=2.00),
-    BetSizeBucket(key="pct_200_300", label="200-300%", lower=2.00, upper=3.00),
-    BetSizeBucket(key="pct_300_plus", label="300%+", lower=3.00, upper=float("inf")),
+    BetSizeBucket(key="pct_100_plus", label="100%+", lower=1.00, upper=float("inf")),
 )
 
 

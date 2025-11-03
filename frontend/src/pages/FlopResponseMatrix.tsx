@@ -68,8 +68,7 @@ const BUCKET_REPRESENTATIVE_RATIO: Record<string, number> = {
   pct_40_60: 0.5,
   pct_60_80: 0.7,
   pct_80_100: 0.9,
-  pct_100_125: 1.125,
-  pct_125_plus: 1.75,
+  pct_100_plus: 1.6,
   all_in: 3.5,
   one_bb: 0.67,
 };
@@ -116,7 +115,7 @@ const deriveRowGradient = (value: number, rowMax: number, palette: 'orange' | 'r
 
 const ANY_OPTION: SelectOption = { key: '', label: 'Any' };
 
-const HIDDEN_BUCKET_KEYS = ['pct_125_200', 'pct_200_300', 'pct_300_plus'];
+const HIDDEN_BUCKET_KEYS: string[] = ['check'];
 
 const HAND_MEMBER_KEYS = [
   'Air',
@@ -226,16 +225,28 @@ const toBucketEntries = (bucketKeys: string[], aggregates: Map<string, BucketAgg
 };
 
 const FlopResponseMatrix = () => {
-  const { data, bucketOrder, betTypes, positions, heroPositions, loading, error, usingSample } =
-    useFlopResponseMatrix();
+  const {
+    data,
+    bucketOrder,
+    betTypes,
+    positions,
+    heroPositions,
+    textures,
+    preflopOptions,
+    loading,
+    error,
+    usingSample,
+  } = useFlopResponseMatrix();
 
   const [heroPosition, setHeroPosition] = useState('');
   const [betType, setBetType] = useState('');
   const [position, setPosition] = useState('');
   const [playerCount, setPlayerCount] = useState('');
+  const [texture, setTexture] = useState('any');
+  const [preflopCategory, setPreflopCategory] = useState('any');
   const [groupedHandTypes, setGroupedHandTypes] = useState(true);
   const [responderGroupedHandTypes, setResponderGroupedHandTypes] = useState(true);
-  const [responderResponseType, setResponderResponseType] = useState<'call' | 'raise'>('call');
+  const [responderResponseType, setResponderResponseType] = useState<'call' | 'raise' | 'continue'>('call');
 
   const {
     data: handData,
@@ -266,6 +277,39 @@ const FlopResponseMatrix = () => {
     [heroPositions],
   );
   const positionOptions = useMemo(() => [ANY_OPTION, ...positions], [positions]);
+  const textureOptions = useMemo(() => {
+    if (textures.length > 0) {
+      return textures;
+    }
+    return [
+      { key: 'any', label: 'All Textures' },
+      { key: 'rainbow', label: 'Rainbow Flops' },
+    ];
+  }, [textures]);
+
+  const preflopOptionsWithFallback = useMemo(() => {
+    if (preflopOptions.length > 0) {
+      return preflopOptions;
+    }
+    return [
+      { key: 'any', label: 'All Preflop Pots' },
+      { key: 'limped', label: 'Limped Pot (No Raise)' },
+      { key: 'single_raise', label: 'Single-Raise Pot' },
+      { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+    ];
+  }, [preflopOptions]);
+
+  useEffect(() => {
+    if (!textureOptions.some((option) => option.key === texture)) {
+      setTexture(textureOptions[0]?.key ?? 'any');
+    }
+  }, [textureOptions, texture]);
+
+  useEffect(() => {
+    if (!preflopOptionsWithFallback.some((option) => option.key === preflopCategory)) {
+      setPreflopCategory(preflopOptionsWithFallback[0]?.key ?? 'any');
+    }
+  }, [preflopOptionsWithFallback, preflopCategory]);
 
   const availablePlayerCounts = useMemo(() => {
     const counts = new Set<number>();
@@ -279,11 +323,27 @@ const FlopResponseMatrix = () => {
       if (position && scenario.position !== position) {
         return;
       }
+      const scenarioTexture = scenario.textureKey ?? 'any';
+      if (texture === 'any') {
+        if (scenarioTexture !== 'any') {
+          return;
+        }
+      } else if (scenarioTexture !== texture) {
+        return;
+      }
+      const scenarioPreflop = scenario.preflopKey ?? 'any';
+      if (preflopCategory === 'any') {
+        if (scenarioPreflop !== 'any') {
+          return;
+        }
+      } else if (scenarioPreflop !== preflopCategory) {
+        return;
+      }
       counts.add(scenario.playerCount);
     });
     const sorted = Array.from(counts).sort((a, b) => a - b);
     return sorted;
-  }, [data, heroPosition, betType, position]);
+  }, [data, heroPosition, betType, position, texture, preflopCategory]);
 
   useEffect(() => {
     if (!playerCount) {
@@ -295,16 +355,32 @@ const FlopResponseMatrix = () => {
     }
   }, [availablePlayerCounts, playerCount]);
 
-  const playerCountOptions = useMemo(() => [ANY_OPTION, ...availablePlayerCounts.map((value) => ({ key: String(value), label: String(value) }))], [availablePlayerCounts]);
+  const playerCountOptions = useMemo(
+    () => [ANY_OPTION, ...availablePlayerCounts.map((value) => ({ key: String(value), label: String(value) }))],
+    [availablePlayerCounts],
+  );
 
   const responderResponseTypeOptions = useMemo(() => {
-    if (responderResponseTypes && responderResponseTypes.length > 0) {
-      return responderResponseTypes;
+    const base =
+      responderResponseTypes && responderResponseTypes.length > 0
+        ? responderResponseTypes
+        : [
+            { key: 'call', label: 'Call' },
+            { key: 'raise', label: 'Raise' },
+          ];
+    const seen = new Set<string>();
+    const options: SelectOption[] = [];
+    base.forEach((option) => {
+      if ((option.key === 'call' || option.key === 'raise') && !seen.has(option.key)) {
+        seen.add(option.key);
+        options.push(option);
+      }
+    });
+    if (!seen.has('continue')) {
+      options.push({ key: 'continue', label: 'Continue' });
+      seen.add('continue');
     }
-    return [
-      { key: 'call', label: 'Call' },
-      { key: 'raise', label: 'Raise' },
-    ];
+    return options;
   }, [responderResponseTypes]);
 
   const matchingScenarios = useMemo(() => {
@@ -321,9 +397,25 @@ const FlopResponseMatrix = () => {
       if (playerCount && scenario.playerCount !== Number(playerCount)) {
         return false;
       }
+      const scenarioTexture = scenario.textureKey ?? 'any';
+      if (texture === 'any') {
+        if (scenarioTexture !== 'any') {
+          return false;
+        }
+      } else if (scenarioTexture !== texture) {
+        return false;
+      }
+      const scenarioPreflop = scenario.preflopKey ?? 'any';
+      if (preflopCategory === 'any') {
+        if (scenarioPreflop !== 'any') {
+          return false;
+        }
+      } else if (scenarioPreflop !== preflopCategory) {
+        return false;
+      }
       return true;
     });
-  }, [data, heroPosition, betType, position, playerCount]);
+  }, [data, heroPosition, betType, position, playerCount, texture, preflopCategory]);
 
   const matchingHandScenarios = useMemo(() => {
     return handData.filter((scenario) => {
@@ -339,9 +431,25 @@ const FlopResponseMatrix = () => {
       if (playerCount && scenario.playerCount !== Number(playerCount)) {
         return false;
       }
+      const scenarioTexture = scenario.textureKey ?? 'any';
+      if (texture === 'any') {
+        if (scenarioTexture !== 'any') {
+          return false;
+        }
+      } else if (scenarioTexture !== texture) {
+        return false;
+      }
+      const scenarioPreflop = scenario.preflopKey ?? 'any';
+      if (preflopCategory === 'any') {
+        if (scenarioPreflop !== 'any') {
+          return false;
+        }
+      } else if (scenarioPreflop !== preflopCategory) {
+        return false;
+      }
       return true;
     });
-  }, [handData, heroPosition, betType, position, playerCount]);
+  }, [handData, heroPosition, betType, position, playerCount, texture, preflopCategory]);
 
   const matchingResponderScenarios = useMemo(() => {
     return responderData.filter((scenario) => {
@@ -357,12 +465,38 @@ const FlopResponseMatrix = () => {
       if (playerCount && scenario.playerCount !== Number(playerCount)) {
         return false;
       }
-      if (scenario.responseType !== responderResponseType) {
+      if (
+        responderResponseType !== 'continue' &&
+        scenario.responseType !== responderResponseType
+      ) {
+        return false;
+      }
+      if (
+        responderResponseType === 'continue' &&
+        scenario.responseType !== 'call' &&
+        scenario.responseType !== 'raise'
+      ) {
+        return false;
+      }
+      const scenarioTexture = scenario.textureKey ?? 'any';
+      if (texture === 'any') {
+        if (scenarioTexture !== 'any') {
+          return false;
+        }
+      } else if (scenarioTexture !== texture) {
+        return false;
+      }
+      const scenarioPreflop = scenario.preflopKey ?? 'any';
+      if (preflopCategory === 'any') {
+        if (scenarioPreflop !== 'any') {
+          return false;
+        }
+      } else if (scenarioPreflop !== preflopCategory) {
         return false;
       }
       return true;
     });
-  }, [responderData, heroPosition, betType, position, playerCount, responderResponseType]);
+  }, [responderData, heroPosition, betType, position, playerCount, responderResponseType, texture, preflopCategory]);
 
   const aggregates = useMemo(() => combineScenarios(matchingScenarios), [matchingScenarios]);
   const { entries, maxEvents } = useMemo(
@@ -677,26 +811,38 @@ const FlopResponseMatrix = () => {
           </Alert>
         )}
 
-        <Flex gap={4} wrap="wrap">
-          <FormControl maxW="220px">
+        <Flex gap={3} wrap="wrap">
+          <FormControl flex="1 1 160px" maxW="180px">
             <FormLabel fontSize="sm">Bettor position</FormLabel>
             <Select value={heroPosition} onChange={handleSelect(setHeroPosition)}>
               {heroPositionOptions.map(renderOption)}
             </Select>
           </FormControl>
-          <FormControl maxW="220px">
+          <FormControl flex="1 1 160px" maxW="180px">
             <FormLabel fontSize="sm">Bet classification</FormLabel>
             <Select value={betType} onChange={handleSelect(setBetType)}>
               {betTypeOptions.map(renderOption)}
             </Select>
           </FormControl>
-          <FormControl maxW="220px">
+          <FormControl flex="1 1 160px" maxW="180px">
+            <FormLabel fontSize="sm">Flop texture</FormLabel>
+            <Select value={texture} onChange={handleSelect(setTexture)}>
+              {textureOptions.map(renderOption)}
+            </Select>
+          </FormControl>
+          <FormControl flex="1 1 160px" maxW="180px">
+            <FormLabel fontSize="sm">Preflop action</FormLabel>
+            <Select value={preflopCategory} onChange={handleSelect(setPreflopCategory)}>
+              {preflopOptionsWithFallback.map(renderOption)}
+            </Select>
+          </FormControl>
+          <FormControl flex="1 1 160px" maxW="180px">
             <FormLabel fontSize="sm">Players on flop</FormLabel>
             <Select value={playerCount} onChange={handleSelect(setPlayerCount)}>
               {playerCountOptions.map(renderOption)}
             </Select>
           </FormControl>
-          <FormControl maxW="220px">
+          <FormControl flex="1 1 160px" maxW="180px">
             <FormLabel fontSize="sm">Bettor IP / OOP</FormLabel>
             <Select value={position} onChange={handleSelect(setPosition)}>
               {positionOptions.map(renderOption)}
@@ -1064,7 +1210,7 @@ const FlopResponseMatrix = () => {
                 {responderResponseTypeOptions.map((option) => (
                   <Button
                     key={option.key}
-                    onClick={() => setResponderResponseType(option.key as 'call' | 'raise')}
+                    onClick={() => setResponderResponseType(option.key as 'call' | 'raise' | 'continue')}
                     isActive={option.key === responderResponseType}
                   >
                     {option.label}

@@ -17,6 +17,8 @@ export type HandScenario = {
   betType: string;
   position: 'IP' | 'OOP';
   playerCount: number;
+  textureKey: string;
+  preflopKey: string;
   metrics: HandMetric[];
 };
 
@@ -44,11 +46,15 @@ type RawPayload = {
   positions: Array<{ key: string; label: string }>;
   hero_positions: string[];
   player_counts: number[];
+  textures: Array<{ key: string; label: string }>;
+  preflop_categories: Array<{ key: string; label: string }>;
   scenarios: Array<{
     hero_position: string;
     bet_type: string;
     position: 'IP' | 'OOP';
     player_count: number;
+    texture_key: string;
+    preflop_key: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -67,6 +73,8 @@ type HandMatrixState = {
   positions: Array<{ key: string; label: string }>;
   heroPositions: string[];
   playerCounts: number[];
+  textures: Array<{ key: string; label: string }>;
+  preflopOptions: Array<{ key: string; label: string }>;
   loading: boolean;
   error: string | null;
   usingSample: boolean;
@@ -78,9 +86,7 @@ const SAMPLE_BUCKETS: HandBucketMeta[] = [
   { key: 'pct_40_60', label: '40-60%' },
   { key: 'pct_60_80', label: '60-80%' },
   { key: 'pct_80_100', label: '80-100%' },
-  { key: 'pct_100_125', label: '100-125%' },
-  { key: 'pct_125_200', label: '125-200%' },
-  { key: 'pct_125_plus', label: '125%+' },
+  { key: 'pct_100_plus', label: '100%+' },
   { key: 'all_in', label: 'All-In' },
   { key: 'one_bb', label: '1 BB' },
 ];
@@ -119,6 +125,8 @@ const SAMPLE_SCENARIOS: HandScenario[] = [
     betType: 'cbet',
     position: 'IP',
     playerCount: 2,
+    textureKey: 'any',
+    preflopKey: 'any',
     metrics: SAMPLE_BUCKETS.map((bucket, index) => {
       if (bucket.key === 'pct_40_60') {
         return {
@@ -143,26 +151,26 @@ const SAMPLE_SCENARIOS: HandScenario[] = [
           },
         };
       }
-      if (bucket.key === 'pct_125_plus') {
+      if (bucket.key === 'pct_100_plus') {
         return {
           bucketKey: bucket.key,
           bucketLabel: bucket.label,
-          events: 15,
+          events: 55,
           categories: {
-            Air: 4,
-            'Underpair': 1,
-            'Bottom Pair': 0,
-            'Middle Pair': 0,
-            'Top Pair': 3,
-            Overpair: 2,
-            'Two Pair': 2,
-            'Trips/Set': 3,
-            Straight: 1,
-            Flush: 0,
-            'Full House': 0,
+            Air: 10,
+            'Underpair': 3,
+            'Bottom Pair': 2,
+            'Middle Pair': 2,
+            'Top Pair': 12,
+            Overpair: 8,
+            'Two Pair': 6,
+            'Trips/Set': 6,
+            Straight: 3,
+            Flush: 2,
+            'Full House': 1,
             Quads: 0,
-            'Flush Draw': 2,
-            'OESD/DG': 1,
+            'Flush Draw': 5,
+            'OESD/DG': 4,
           },
         };
       }
@@ -197,6 +205,8 @@ const INITIAL_STATE: HandMatrixState = {
   positions: [],
   heroPositions: [],
   playerCounts: [],
+  textures: [],
+  preflopOptions: [],
   loading: true,
   error: null,
   usingSample: false,
@@ -208,6 +218,8 @@ const transform = (payload: RawPayload): HandMatrixState => {
     betType: scenario.bet_type,
     position: scenario.position,
     playerCount: scenario.player_count,
+    textureKey: scenario.texture_key,
+    preflopKey: scenario.preflop_key,
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,
@@ -229,6 +241,18 @@ const transform = (payload: RawPayload): HandMatrixState => {
     positions: payload.positions,
     heroPositions: payload.hero_positions,
     playerCounts: payload.player_counts,
+    textures:
+      payload.textures ?? [
+        { key: 'any', label: 'All Textures' },
+        { key: 'rainbow', label: 'Rainbow Flops' },
+      ],
+    preflopOptions:
+      payload.preflop_categories ?? [
+        { key: 'any', label: 'All Preflop Pots' },
+        { key: 'limped', label: 'Limped Pot (No Raise)' },
+        { key: 'single_raise', label: 'Single-Raise Pot' },
+        { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+      ],
     loading: false,
     error: null,
     usingSample: false,
@@ -264,6 +288,16 @@ export const useFlopHandMatrix = (): HandMatrixState => {
           positions: SAMPLE_POSITIONS,
           heroPositions: ['BTN'],
           playerCounts: [2],
+          textures: [
+            { key: 'any', label: 'All Textures' },
+            { key: 'rainbow', label: 'Rainbow Flops' },
+          ],
+          preflopOptions: [
+            { key: 'any', label: 'All Preflop Pots' },
+            { key: 'limped', label: 'Limped Pot (No Raise)' },
+            { key: 'single_raise', label: 'Single-Raise Pot' },
+            { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+          ],
           loading: false,
           error: 'Unable to load flop hand breakdown. Displaying sample data.',
           usingSample: true,

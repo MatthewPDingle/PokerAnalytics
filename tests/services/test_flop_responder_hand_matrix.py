@@ -19,6 +19,8 @@ class FlopResponderHandMatrixTests(unittest.TestCase):
                 "bucket_key": "pct_40_60",
                 "is_all_in": False,
                 "is_one_bb": False,
+                "flop_texture_keys": ["rainbow"],
+                "preflop_aggression_level": 0,
                 "responses": [
                     {
                         "response": "call",
@@ -49,6 +51,8 @@ class FlopResponderHandMatrixTests(unittest.TestCase):
                 "bucket_key": "pct_25_40",
                 "is_all_in": False,
                 "is_one_bb": False,
+                "flop_texture_keys": ["two_tone"],
+                "preflop_aggression_level": 1,
                 "responses": [
                     {
                         "response": "call",
@@ -58,22 +62,62 @@ class FlopResponderHandMatrixTests(unittest.TestCase):
                     }
                 ],
             },
+            {
+                "hero_position": "CO",
+                "bet_type": "cbet",
+                "in_position": True,
+                "player_count": 2,
+                "ratio": 1.25,
+                "bucket_key": "pct_100_plus",
+                "is_all_in": False,
+                "is_one_bb": False,
+                "flop_texture_keys": ["monotone"],
+                "preflop_aggression_level": 3,
+                "responses": [
+                    {
+                        "response": "raise",
+                        "hand_primary": "Overpair",
+                        "has_flush_draw": False,
+                        "has_oesd_dg": False,
+                    }
+                ],
+            },
         ]
 
         payload = _aggregate(events)
 
-        self.assertEqual(payload["version"], 1)
+        self.assertEqual(payload["version"], 5)
         response_types = [option["key"] for option in payload["response_types"]]
         self.assertIn("call", response_types)
         self.assertIn("raise", response_types)
+        texture_keys = [texture["key"] for texture in payload["textures"]]
+        self.assertIn("any", texture_keys)
+        preflop_keys = [option["key"] for option in payload["preflop_categories"]]
+        self.assertIn("any", preflop_keys)
+        self.assertIn("limped", preflop_keys)
+        self.assertIn("single_raise", preflop_keys)
+        self.assertIn("three_bet_plus", preflop_keys)
 
         scenarios = payload["scenarios"]
         call_scenario = next(
-            (scenario for scenario in scenarios if scenario["response_type"] == "call"),
+            (
+                scenario
+                for scenario in scenarios
+                if scenario["response_type"] == "call"
+                and scenario.get("texture_key") == "any"
+                and scenario.get("preflop_key") == "any"
+            ),
             None,
         )
         raise_scenario = next(
-            (scenario for scenario in scenarios if scenario["response_type"] == "raise"),
+            (
+                scenario
+                for scenario in scenarios
+                if scenario["hero_position"] == "BTN"
+                and scenario["response_type"] == "raise"
+                and scenario.get("texture_key") == "any"
+                and scenario.get("preflop_key") == "any"
+            ),
             None,
         )
 
@@ -91,6 +135,36 @@ class FlopResponderHandMatrixTests(unittest.TestCase):
             metrics = {metric["bucket_key"]: metric for metric in raise_scenario["metrics"]}
             self.assertEqual(metrics["pct_40_60"]["events"], 1)
             self.assertEqual(metrics["pct_40_60"]["categories"]["Overpair"], 1)
+
+        single_raise_call = next(
+            (
+                scenario
+                for scenario in scenarios
+                if scenario["response_type"] == "call"
+                and scenario.get("texture_key") == "any"
+                and scenario.get("preflop_key") == "single_raise"
+            ),
+            None,
+        )
+        self.assertIsNotNone(single_raise_call)
+        if single_raise_call is not None:
+            metrics = {metric["bucket_key"]: metric for metric in single_raise_call["metrics"]}
+            self.assertEqual(metrics["pct_25_40"]["events"], 1)
+
+        three_bet_raise = next(
+            (
+                scenario
+                for scenario in scenarios
+                if scenario["response_type"] == "raise"
+                and scenario.get("texture_key") == "any"
+                and scenario.get("preflop_key") == "three_bet_plus"
+            ),
+            None,
+        )
+        self.assertIsNotNone(three_bet_raise)
+        if three_bet_raise is not None:
+            metrics = {metric["bucket_key"]: metric for metric in three_bet_raise["metrics"]}
+            self.assertEqual(metrics["pct_100_plus"]["events"], 1)
 
 
 if __name__ == "__main__":

@@ -80,11 +80,7 @@ const SAMPLE_BUCKETS: LineBucketMeta[] = [
   { key: 'pct_40_60', label: '40-60%' },
   { key: 'pct_60_80', label: '60-80%' },
   { key: 'pct_80_100', label: '80-100%' },
-  { key: 'pct_100_125', label: '100-125%' },
-  { key: 'pct_125_200', label: '125-200%' },
-  { key: 'pct_200_300', label: '200-300%' },
-  { key: 'pct_300_plus', label: '300%+' },
-  { key: 'pct_125_plus', label: '125%+' },
+  { key: 'pct_100_plus', label: '100%+' },
   { key: 'all_in', label: 'All-In' },
   { key: 'one_bb', label: '1 BB' },
 ];

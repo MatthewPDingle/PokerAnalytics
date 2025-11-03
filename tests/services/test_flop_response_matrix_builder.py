@@ -76,6 +76,7 @@ class FlopResponseMatrixBuilderTests(unittest.TestCase):
         self.assertGreater(event["total_added_flop_bb"], 0)
         self.assertAlmostEqual(event["total_added_all_bb"], event["total_added_flop_bb"], places=6)
         self.assertIn("responses", event)
+        self.assertEqual(event["preflop_aggression_level"], 1)
         self.assertIsInstance(event["responses"], list)
 
     def test_donk_event(self) -> None:
@@ -122,6 +123,7 @@ class FlopResponseMatrixBuilderTests(unittest.TestCase):
         self.assertGreater(event["total_added_flop_bb"], 0)
         self.assertAlmostEqual(event["total_added_all_bb"], event["total_added_flop_bb"], places=6)
         self.assertIn("responses", event)
+        self.assertEqual(event["preflop_aggression_level"], 1)
 
     def test_stab_event(self) -> None:
         xml = textwrap.dedent(
@@ -165,6 +167,7 @@ class FlopResponseMatrixBuilderTests(unittest.TestCase):
         self.assertGreater(event["total_added_flop_bb"], 0)
         self.assertAlmostEqual(event["total_added_all_bb"], event["total_added_flop_bb"], places=6)
         self.assertIn("responses", event)
+        self.assertEqual(event["preflop_aggression_level"], 1)
 
     def test_non_hero_bet_included(self) -> None:
         xml = textwrap.dedent(
@@ -263,6 +266,7 @@ class FlopResponseMatrixBuilderTests(unittest.TestCase):
         self.assertFalse(event["in_position"])
         self.assertFalse(event["bettor_is_hero"])
         self.assertGreaterEqual(event["total_added_all_bb"], event.get("total_added_flop_bb", 0))
+        self.assertEqual(event["preflop_aggression_level"], 2)
 
     def test_hero_bet_excluded(self) -> None:
         xml = _wrap_xml(

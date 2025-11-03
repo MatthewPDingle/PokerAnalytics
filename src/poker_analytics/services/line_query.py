@@ -12,14 +12,17 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 from poker_analytics.config import build_data_paths
 from poker_analytics.data.flop_hand_categories import DRAW_CATEGORIES, PRIMARY_HAND_TYPES
 from poker_analytics.data.stakes import StakePolicy
-from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, bucket_keys_for_event
+from poker_analytics.services.flop_bucket_utils import BUCKET_KEYS, BUCKET_METADATA, bucket_keys_for_event
 from poker_analytics.services.flop_response_matrix_builder import collect_line_events
 from poker_analytics.services.line_descriptor import descriptor_fingerprint, parse_line_descriptor
 
-CURRENT_VERSION = 4
+CURRENT_VERSION = 8
 
-HAND_TYPE_KEYS: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES)
+UNKNOWN_HAND_KEY = "Unknown"
+HAND_TYPE_KEYS: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES) + (UNKNOWN_HAND_KEY,)
 HAND_TYPE_SET = set(HAND_TYPE_KEYS)
+RESPONDER_ACTION_ORDER: Sequence[str] = ("check", "bet", "call", "raise", "fold")
+RESPONDER_ACTION_SET = set(RESPONDER_ACTION_ORDER)
 BET_ACTION_TO_TYPE = {
     "cbet": "cbet",
     "donk": "donk",
@@ -29,13 +32,8 @@ BET_ACTION_TO_TYPE = {
 }
 
 REQUEST_BUCKET_EXPANSIONS: dict[str, set[str]] = {
-    "pct_100_plus": {
-        "pct_100_125",
-        "pct_125_200",
-        "pct_200_300",
-        "pct_300_plus",
-        "pct_125_plus",
-    }
+    "pct_100_plus": {"pct_100_plus"},
+    "pct_125_plus": {"pct_100_plus"},
 }
 
 BUCKET_KEY_SET = {meta.key for meta in BUCKET_METADATA}
@@ -60,6 +58,7 @@ class CompiledFilters:
     require_heads_up: bool = False
     require_multiway: bool = False
     bucket_keys: Optional[set[str]] = None
+    preflop_bucket_keys: Optional[set[str]] = None
     ratio_min: Optional[float] = None
     ratio_max: Optional[float] = None
     exclude_hero: bool = False
@@ -130,6 +129,7 @@ def _compile_filters(descriptor, request_filters: Optional[Mapping[str, Any]] = 
         bet_types=set(),
         positions=set(),
         bucket_keys=set(),
+        preflop_bucket_keys=set(),
         texture_keys=set(),
         players_dealt=set(),
         player_counts=set(),
@@ -209,6 +209,23 @@ def _compile_filters(descriptor, request_filters: Optional[Mapping[str, Any]] = 
                     expanded.add(key)
 
             filters.bucket_keys = expanded or None
+
+        preflop_bucket_keys = request_filters.get("preflop_bucket_keys") or request_filters.get("preflopBucketKeys")
+        if preflop_bucket_keys is not None:
+            if isinstance(preflop_bucket_keys, (list, tuple, set)):
+                incoming = {str(key) for key in preflop_bucket_keys}
+            else:
+                incoming = {str(preflop_bucket_keys)}
+
+            expanded: set[str] = set()
+            for key in incoming:
+                expanded_keys = REQUEST_BUCKET_EXPANSIONS.get(key)
+                if expanded_keys:
+                    expanded.update(expanded_keys)
+                else:
+                    expanded.add(key)
+
+            filters.preflop_bucket_keys = expanded or None
 
         texture_keys = request_filters.get("texture_keys") or request_filters.get("textureKeys")
         if texture_keys is not None and filters.texture_keys is not None:
@@ -331,6 +348,8 @@ def _compile_filters(descriptor, request_filters: Optional[Mapping[str, Any]] = 
         filters.positions = None
     if not filters.bucket_keys:
         filters.bucket_keys = None
+    if not filters.preflop_bucket_keys:
+        filters.preflop_bucket_keys = None
     if not filters.texture_keys:
         filters.texture_keys = None
     if not filters.players_dealt:
@@ -365,6 +384,7 @@ def _matches_filters(event: Mapping[str, object], filters: CompiledFilters) -> b
         player_count = None
 
     bucket_keys = _event_bucket_keys(event)
+    preflop_bucket = str(event.get("preflop_bucket_key") or "")
     try:
         ratio_value = float(event.get("turn_ratio") or 0.0)
     except (TypeError, ValueError):
@@ -408,6 +428,8 @@ def _matches_filters(event: Mapping[str, object], filters: CompiledFilters) -> b
     if filters.player_counts and (player_count is None or player_count not in filters.player_counts):
         return False
     if filters.bucket_keys and (not bucket_keys or filters.bucket_keys.isdisjoint(bucket_keys)):
+        return False
+    if filters.preflop_bucket_keys and (not preflop_bucket or preflop_bucket not in filters.preflop_bucket_keys):
         return False
     if filters.ratio_min is not None and ratio_value < filters.ratio_min:
         return False
@@ -460,21 +482,8 @@ def _build_payload(
     request_filters,
     descriptor_fp,
 ) -> dict:
-    bucket_stats = {
-        meta.key: {
-            "events": 0,
-            "fold": 0,
-            "call": 0,
-            "raise": 0,
-            "ratio_sum": 0.0,
-            "bet_sum": 0.0,
-            "added_flop_sum": 0.0,
-            "added_all_sum": 0.0,
-            "share_all_sum": 0.0,
-            "hand_categories": {key: 0 for key in HAND_TYPE_KEYS},
-        }
-        for meta in BUCKET_METADATA
-    }
+    bucket_stats = {meta.key: _create_action_aggregate(meta) for meta in BUCKET_METADATA}
+    totals_stats = _create_action_aggregate(None)
 
     context_counters = {
         "line_keys": Counter(),
@@ -485,10 +494,14 @@ def _build_payload(
         "players_remaining": Counter(),
         "hero_positions": Counter(),
         "relative_positions": Counter(),
+        "actor_seats": Counter(),
         "all_in_called": Counter(),
         "effective_stack_buckets": Counter(),
         "spr_buckets": Counter(),
         "response_types": Counter(),
+        "responder_seats": Counter(),
+        "responder_actions": Counter(),
+        "preflop_buckets": Counter(),
     }
 
     total_events = 0
@@ -499,6 +512,9 @@ def _build_payload(
             continue
 
         outcome = str(event.get("outcome") or "").lower()
+        base_bucket_key = str(event.get("bucket_key") or "")
+        preflop_bucket = str(event.get("preflop_bucket_key") or "")
+
         try:
             ratio_value = float(event.get("turn_ratio") or 0.0)
         except (TypeError, ValueError):
@@ -525,33 +541,54 @@ def _build_payload(
             share_all = 0.0
 
         hand_primary = str(event.get("hand_primary") or "")
+        has_flush_draw = bool(event.get("has_flush_draw"))
+        has_oesd_dg = bool(event.get("has_oesd_dg"))
+
+        raw_responses = event.get("behind_responses")
+        behind_responses: list[Mapping[str, object]] = []
+        if isinstance(raw_responses, list):
+            behind_responses = [response for response in raw_responses if isinstance(response, Mapping)]
 
         for bucket_key in bucket_keys:
-            stats = bucket_stats[bucket_key]
-            stats["events"] += 1
+            stats = bucket_stats.get(bucket_key)
+            if stats is None:
+                continue
+            _accumulate_action(
+                stats,
+                bucket_key=bucket_key,
+                outcome=outcome,
+                ratio_value=ratio_value,
+                bet_amount=bet_amount,
+                added_flop=added_flop,
+                added_all=added_all,
+                share_all=share_all,
+                hand_primary=hand_primary,
+                has_flush_draw=has_flush_draw,
+                has_oesd_dg=has_oesd_dg,
+                behind_responses=behind_responses,
+            )
 
-            if bucket_key != "check":
-                if outcome == "raise":
-                    stats["raise"] += 1
-                elif outcome == "call":
-                    stats["call"] += 1
-                else:
-                    stats["fold"] += 1
-                stats["ratio_sum"] += ratio_value
-                stats["bet_sum"] += bet_amount
-
-            stats["added_flop_sum"] += added_flop
-            stats["added_all_sum"] += added_all
-            stats["share_all_sum"] += share_all
-
-            if hand_primary in HAND_TYPE_SET:
-                stats["hand_categories"][hand_primary] += 1
-            if event.get("has_flush_draw"):
-                stats["hand_categories"]["Flush Draw"] += 1
-            if event.get("has_oesd_dg"):
-                stats["hand_categories"]["OESD/DG"] += 1
+        primary_bucket = base_bucket_key or bucket_keys[0]
+        _accumulate_action(
+            totals_stats,
+            bucket_key=primary_bucket,
+            outcome=outcome,
+            ratio_value=ratio_value,
+            bet_amount=bet_amount,
+            added_flop=added_flop,
+            added_all=added_all,
+            share_all=share_all,
+            hand_primary=hand_primary,
+            has_flush_draw=has_flush_draw,
+            has_oesd_dg=has_oesd_dg,
+            behind_responses=behind_responses,
+        )
 
         total_events += 1
+
+        actor_seat = str(event.get("actor_seat") or "")
+        if actor_seat:
+            context_counters["actor_seats"][actor_seat] += 1
 
         context_counters["line_keys"][str(event.get("line_key") or "")] += 1
         context_counters["bet_types"][str(event.get("bet_type") or "")] += 1
@@ -562,59 +599,34 @@ def _build_payload(
         context_counters["hero_positions"][str(event.get("hero_position") or "")] += 1
         context_counters["relative_positions"][str(event.get("relative_position") or "")] += 1
         context_counters["all_in_called"]["yes" if event.get("all_in_called") else "no"] += 1
+
         eff_bucket_key = str(event.get("effective_stack_bucket") or "")
         if eff_bucket_key:
             context_counters["effective_stack_buckets"][eff_bucket_key] += 1
         spr_bucket_key = str(event.get("spr_bucket") or "")
         if spr_bucket_key:
             context_counters["spr_buckets"][spr_bucket_key] += 1
-        context_counters["response_types"][str(event.get("response_type") or "")] += 1
 
-    response_rows = []
-    hand_rows = []
+        response_type = str(event.get("response_type") or "")
+        if response_type:
+            context_counters["response_types"][response_type] += 1
 
-    for meta in BUCKET_METADATA:
-        stats = bucket_stats[meta.key]
-        events_count = stats["events"]
-        fold_events = stats["fold"]
-        call_events = stats["call"]
-        raise_events = stats["raise"]
-        continue_events = call_events + raise_events
-        avg_ratio = stats["ratio_sum"] / events_count if events_count else 0.0
-        avg_bet_bb = stats["bet_sum"] / events_count if events_count else 0.0
-        avg_added_flop = stats["added_flop_sum"] / events_count if events_count else 0.0
-        avg_added_all = stats["added_all_sum"] / events_count if events_count else 0.0
-        avg_share_all = stats["share_all_sum"] / events_count if events_count else 0.0
+        for response in behind_responses:
+            seat_label = str(response.get("seat_label") or "")
+            if seat_label:
+                context_counters["responder_seats"][seat_label] += 1
+            resp_action = str(response.get("response_type") or "")
+            if resp_action:
+                context_counters["responder_actions"][resp_action] += 1
 
-        response_rows.append(
-            {
-                "bucket_key": meta.key,
-                "bucket_label": meta.label,
-                "events": events_count,
-                "fold_events": fold_events,
-                "call_events": call_events,
-                "raise_events": raise_events,
-                "continue_events": continue_events,
-                "fold_pct": _percentage(fold_events, events_count),
-                "call_pct": _percentage(call_events, events_count),
-                "raise_pct": _percentage(raise_events, events_count),
-                "continue_pct": _percentage(continue_events, events_count),
-                "avg_ratio": avg_ratio,
-                "avg_bet_bb": avg_bet_bb,
-                "avg_added_flop_bb": avg_added_flop,
-                "avg_added_all_bb": avg_added_all,
-                "avg_share_all": avg_share_all,
-            }
-        )
+        if preflop_bucket:
+            context_counters["preflop_buckets"][preflop_bucket] += 1
 
-        hand_rows.append(
-            {
-                "bucket_key": meta.key,
-                "bucket_label": meta.label,
-                "events": events_count,
-                "categories": dict(stats["hand_categories"]),
-            }
-        )
+    action_rows = [
+        _finalise_action_summary(meta, bucket_stats[meta.key])
+        for meta in BUCKET_METADATA
+    ]
+    totals_row = _finalise_action_summary(None, totals_stats, action_key="all", action_label="All Actions")
 
     context = {
         "total_events": total_events,
@@ -634,14 +646,243 @@ def _build_payload(
             "allowed": stake_policy.allowed_big_blinds,
         },
         "bucket_order": [{"key": meta.key, "label": meta.label} for meta in BUCKET_METADATA],
-        "response_metrics": response_rows,
-        "hand_metrics": hand_rows,
+        "action_summaries": action_rows,
+        "totals": totals_row,
         "context": context,
         "fingerprint": fingerprint,
         "descriptor_fingerprint": descriptor_fp,
         "request_filters": request_filters,
         "using_sample": total_events == 0,
     }
+
+
+def _create_action_aggregate(_: Optional[object]) -> dict[str, object]:
+    return {
+        "events": 0,
+        "fold_events": 0,
+        "call_events": 0,
+        "raise_events": 0,
+        "ratio_sum": 0.0,
+        "bet_sum": 0.0,
+        "added_flop_sum": 0.0,
+        "added_all_sum": 0.0,
+        "share_all_sum": 0.0,
+        "hand_categories": Counter(),
+        "responder": _create_responder_aggregate(),
+        "hero_action_counts": Counter(),
+    }
+
+
+def _create_responder_aggregate() -> dict[str, object]:
+    return {
+        "total": 0,
+        "action_counts": Counter(),
+        "hand_categories": Counter(),
+        "bucket_counts": Counter(),
+        "seats": {},
+    }
+
+
+def _create_responder_seat_summary(seat_label: str) -> dict[str, object]:
+    return {
+        "seat_label": seat_label,
+        "responses": 0,
+        "action_counts": Counter(),
+        "hand_categories": Counter(),
+        "bucket_counts": Counter(),
+        "relative_positions": Counter(),
+    }
+
+
+def _increment_hand_category(counter: Counter, primary: str, *, known: bool) -> None:
+    if known and primary:
+        key = primary if primary in HAND_TYPE_SET else UNKNOWN_HAND_KEY
+        counter[key] += 1
+    else:
+        counter[UNKNOWN_HAND_KEY] += 1
+
+
+def _accumulate_action(
+    summary: dict[str, object],
+    *,
+    bucket_key: str,
+    outcome: str,
+    ratio_value: float,
+    bet_amount: float,
+    added_flop: float,
+    added_all: float,
+    share_all: float,
+    hand_primary: str,
+    has_flush_draw: bool,
+    has_oesd_dg: bool,
+    behind_responses: Sequence[Mapping[str, object]],
+) -> None:
+    summary["events"] += 1
+
+    if bucket_key != "check":
+        if outcome == "raise":
+            summary["raise_events"] += 1
+        elif outcome == "call":
+            summary["call_events"] += 1
+        elif outcome == "fold":
+            summary["fold_events"] += 1
+        summary["ratio_sum"] += ratio_value
+        summary["bet_sum"] += bet_amount
+
+    summary["added_flop_sum"] += added_flop
+    summary["added_all_sum"] += added_all
+    summary["share_all_sum"] += share_all
+
+    _increment_hand_category(summary["hand_categories"], hand_primary, known=bool(hand_primary))
+    if has_flush_draw:
+        summary["hand_categories"]["Flush Draw"] += 1
+    if has_oesd_dg:
+        summary["hand_categories"]["OESD/DG"] += 1
+
+    if behind_responses:
+        _accumulate_responder(summary["responder"], behind_responses)
+
+    hero_actions: Counter = summary["hero_action_counts"]  # type: ignore[assignment]
+    hero_actions[bucket_key] += 1
+    if bucket_key == "check":
+        hero_actions["check"] += 1
+    else:
+        hero_actions["bet"] += 1
+        hero_actions["bet_any"] += 1
+        if bucket_key == "all_in":
+            hero_actions["all_in"] += 1
+        if bucket_key == "one_bb":
+            hero_actions["one_bb"] += 1
+
+
+def _accumulate_responder(summary: dict[str, object], responses: Sequence[Mapping[str, object]]) -> None:
+    seats: dict[str, dict[str, object]] = summary["seats"]  # type: ignore[assignment]
+    for response in responses:
+        response_type = str(response.get("response_type") or "").lower()
+        if response_type not in RESPONDER_ACTION_SET:
+            continue
+
+        summary["total"] += 1
+        summary["action_counts"][response_type] += 1
+
+        bucket_keys = response.get("bucket_keys")
+        if isinstance(bucket_keys, (list, tuple, set)):
+            for key in bucket_keys:
+                if key:
+                    summary["bucket_counts"][key] += 1
+
+        seat_label = str(response.get("seat_label") or "UNKNOWN")
+        seat_summary = seats.get(seat_label)
+        if seat_summary is None:
+            seat_summary = _create_responder_seat_summary(seat_label)
+            seats[seat_label] = seat_summary
+        seat_summary["responses"] += 1
+        seat_summary["action_counts"][response_type] += 1
+        if isinstance(bucket_keys, (list, tuple, set)):
+            for key in bucket_keys:
+                if key:
+                    seat_summary["bucket_counts"][key] += 1
+
+        relative_position = str(response.get("relative_position") or "unknown")
+        seat_summary["relative_positions"][relative_position] += 1
+
+        known = bool(response.get("hole_cards_known"))
+        hand_primary = str(response.get("hand_primary") or "")
+        _increment_hand_category(summary["hand_categories"], hand_primary, known=known)
+        _increment_hand_category(seat_summary["hand_categories"], hand_primary, known=known)
+
+        if response.get("has_flush_draw"):
+            summary["hand_categories"]["Flush Draw"] += 1
+            seat_summary["hand_categories"]["Flush Draw"] += 1
+        if response.get("has_oesd_dg"):
+            summary["hand_categories"]["OESD/DG"] += 1
+            seat_summary["hand_categories"]["OESD/DG"] += 1
+
+
+def _finalise_action_summary(
+    meta: Optional[object],
+    stats: dict[str, object],
+    *,
+    action_key: Optional[str] = None,
+    action_label: Optional[str] = None,
+) -> dict[str, object]:
+    key = action_key if action_key is not None else (getattr(meta, "key", None) if meta else None)
+    label = action_label if action_label is not None else (getattr(meta, "label", None) if meta else None)
+
+    events = stats["events"]
+    fold_events = stats["fold_events"]
+    call_events = stats["call_events"]
+    raise_events = stats["raise_events"]
+    continue_events = call_events + raise_events
+
+    avg_ratio = stats["ratio_sum"] / events if events else 0.0
+    avg_bet = stats["bet_sum"] / events if events else 0.0
+    avg_added_flop = stats["added_flop_sum"] / events if events else 0.0
+    avg_added_all = stats["added_all_sum"] / events if events else 0.0
+    avg_share_all = stats["share_all_sum"] / events if events else 0.0
+
+    return {
+        "action_key": key,
+        "action_label": label,
+        "events": events,
+        "fold_events": fold_events,
+        "call_events": call_events,
+        "raise_events": raise_events,
+        "continue_events": continue_events,
+        "fold_pct": _percentage(fold_events, events),
+        "call_pct": _percentage(call_events, events),
+        "raise_pct": _percentage(raise_events, events),
+        "continue_pct": _percentage(continue_events, events),
+        "avg_ratio": avg_ratio,
+        "avg_bet_bb": avg_bet,
+        "avg_added_flop_bb": avg_added_flop,
+        "avg_added_all_bb": avg_added_all,
+        "avg_share_all": avg_share_all,
+        "hand_categories": _finalise_hand_categories(stats["hand_categories"]),
+        "responder_summary": _finalise_responder_summary(stats["responder"]),
+        "hero_actions": _finalise_hero_actions(stats["hero_action_counts"]),
+    }
+
+
+def _finalise_responder_summary(summary: dict[str, object]) -> dict[str, object]:
+    seats: dict[str, dict[str, object]] = summary["seats"]  # type: ignore[assignment]
+    seat_rows = []
+    for seat_label in sorted(seats.keys()):
+        seat_data = seats[seat_label]
+        seat_rows.append(
+            {
+                "seat_label": seat_label,
+                "responses": seat_data["responses"],
+                "action_counts": _finalise_action_counts(seat_data["action_counts"]),
+                "hand_categories": _finalise_hand_categories(seat_data["hand_categories"]),
+                "bet_bucket_counts": _finalise_bucket_counts(seat_data["bucket_counts"]),
+                "relative_positions": {key: int(value) for key, value in seat_data["relative_positions"].items()},
+            }
+        )
+
+    return {
+        "total_responses": summary["total"],
+        "action_counts": _finalise_action_counts(summary["action_counts"]),
+        "hand_categories": _finalise_hand_categories(summary["hand_categories"]),
+        "bet_bucket_counts": _finalise_bucket_counts(summary["bucket_counts"]),
+        "seats": seat_rows,
+    }
+
+
+def _finalise_hand_categories(counter: Counter) -> dict[str, int]:
+    return {key: int(counter.get(key, 0)) for key in HAND_TYPE_KEYS}
+
+
+def _finalise_action_counts(counter: Counter) -> dict[str, int]:
+    return {action: int(counter.get(action, 0)) for action in RESPONDER_ACTION_ORDER}
+
+
+def _finalise_hero_actions(counter: Counter) -> dict[str, int]:
+    return {key: int(value) for key, value in counter.items()}
+
+
+def _finalise_bucket_counts(counter: Counter) -> dict[str, int]:
+    return {key: int(counter[key]) for key in BUCKET_KEYS if counter.get(key)}
 
 
 def _percentage(part: int, total: int) -> float:
@@ -664,6 +905,8 @@ def _filters_metadata(filters: CompiledFilters) -> dict:
         data["multiway"] = True
     if filters.bucket_keys:
         data["bucket_keys"] = sorted(filters.bucket_keys)
+    if filters.preflop_bucket_keys:
+        data["preflop_bucket_keys"] = sorted(filters.preflop_bucket_keys)
     if filters.texture_keys:
         data["texture_keys"] = sorted(filters.texture_keys)
     if filters.players_dealt:

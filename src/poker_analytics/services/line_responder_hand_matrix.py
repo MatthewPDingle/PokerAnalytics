@@ -308,4 +308,4 @@ __all__ = [
     "load_line_responder_hand_matrix",
     "build_line_responder_hand_payload",
 ]
-CURRENT_VERSION = 3
+CURRENT_VERSION = 6

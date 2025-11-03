@@ -17,6 +17,7 @@ from poker_analytics.data.drivehud import DriveHudDataSource
 from poker_analytics.data.stakes import StakePolicy
 from poker_analytics.data.flop_hand_categories import classify_flop_hand, parse_board_cards, parse_hole_cards
 from poker_analytics.data.textures import texture_keys
+from poker_analytics.services.flop_bucket_utils import bucket_keys_for_event
 
 BET_TYPES = {"5", "7"}
 RAISE_TYPES = {"23", "7"}
@@ -171,9 +172,11 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
 
     player_contrib: Dict[str, float] = defaultdict(float)
     total_pot = 0.0
+    preflop_raise_count = 0
     active_players = {player.name for player in players}
     preflop_aggressor: Optional[str] = None
     events: list[dict[str, object]] = []
+    preflop_buckets: Dict[str, Optional[str]] = {}
 
     rounds = sorted(root.findall(".//round"), key=lambda r: int(r.attrib.get("no", "0")))
     flop_player_count: Optional[int] = None
@@ -196,6 +199,12 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
                     continue
 
                 amount = _safe_amount(action_elem)
+                pot_before = total_pot
+                if action_type in BET_TYPES | RAISE_TYPES | ALL_IN_TYPES and amount > 0:
+                    ratio = (amount / pot_before) if pot_before > 0 else None
+                    bucket = bucket_for_ratio(ratio)
+                    preflop_buckets[player] = bucket.key if bucket is not None and ratio is not None else None
+                    preflop_raise_count += 1
                 if amount > 0:
                     total_pot += amount
 
@@ -301,6 +310,8 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
                                 "total_added_all": total_added,
                                 "total_added_all_bb": total_added_bb,
                                 "responses": responses,
+                                "preflop_aggression_level": preflop_raise_count,
+                                "preflop_bucket_key": preflop_buckets.get(player),
                             }
                             events.append(event_record)
                             current_event = event_record
@@ -545,9 +556,18 @@ def _line_events_from_hand_history(
     if not flop_cards:
         return events
 
+    player_classifications: Dict[str, Optional[object]] = {}
+    for name, cards in player_hole_cards.items():
+        if len(cards) == 2 and len(flop_cards) == 3:
+            try:
+                player_classifications[name] = classify_flop_hand(cards, flop_cards)
+            except Exception:
+                player_classifications[name] = None
+
     active_players = {player.name for player in players}
     player_states: Dict[str, dict[str, object]] = {name: {"checked": False} for name in active_players}
     player_stacks: Dict[str, float] = {player.name: player.balance for player in players}
+    preflop_buckets: Dict[str, Optional[str]] = {}
 
     total_pot = 0.0
     preflop_raise_count = 0
@@ -571,6 +591,11 @@ def _line_events_from_hand_history(
                 if not player or not action_type:
                     continue
                 amount = _safe_amount(action_elem)
+                pot_before = total_pot
+                if action_type in BET_TYPES | RAISE_TYPES | ALL_IN_TYPES and amount > 0:
+                    ratio = (amount / pot_before) if pot_before > 0 else None
+                    bucket = bucket_for_ratio(ratio)
+                    preflop_buckets[player] = bucket.key if bucket is not None and ratio is not None else None
                 _deduct_stack(player_stacks, player, amount)
                 if amount > 0:
                     total_pot += amount
@@ -620,9 +645,7 @@ def _line_events_from_hand_history(
                             total_pot += amount
                         continue
                     responder_cards = player_hole_cards.get(player, [])
-                    classification = None
-                    if responder_cards and len(responder_cards) == 2 and len(flop_cards) == 3:
-                        classification = classify_flop_hand(responder_cards, flop_cards)
+                    classification = player_classifications.get(player)
                     prefix = LINE_PREFIX_MAP.get(("call", state.get("checked", False)))
                     if prefix is None:
                         players_acted.add(player)
@@ -650,9 +673,7 @@ def _line_events_from_hand_history(
                             total_pot += amount
                         continue
                     responder_cards = player_hole_cards.get(player, [])
-                    classification = None
-                    if responder_cards and len(responder_cards) == 2 and len(flop_cards) == 3:
-                        classification = classify_flop_hand(responder_cards, flop_cards)
+                    classification = player_classifications.get(player)
                     prefix = LINE_PREFIX_MAP.get(("raise", state.get("checked", False)))
                     if prefix is None:
                         players_acted.add(player)
@@ -690,6 +711,7 @@ def _line_events_from_hand_history(
                 if not player or not action_type:
                     continue
 
+                snapshot_before = set(active_players)
                 amount = _safe_amount(action_elem)
                 pot_before = total_pot
                 _deduct_stack(player_stacks, player, amount)
@@ -714,6 +736,8 @@ def _line_events_from_hand_history(
                             "pot_before": pot_before,
                             "sub_actions": actions[idx + 1 :],
                             "is_all_in": action_type in ALL_IN_TYPES,
+                            "index": idx,
+                            "snapshot_before": list(snapshot_before),
                         }
 
                 if amount > 0:
@@ -761,6 +785,89 @@ def _line_events_from_hand_history(
                 tolerance = max(1e-6, big_blind * 1e-4) if big_blind else 1e-6
                 is_one_bb = suffix == "b" and math.isfinite(big_blind) and abs(amount - big_blind) <= tolerance
                 is_all_in = suffix == "b" and (bool(action_info.get("is_all_in")) or player_stack_after <= tolerance)
+
+                actor_index = action_info.get("index")
+                snapshot_before = action_info.get("snapshot_before") or list(turn_active_players)
+                snapshot_before_set = {str(name) for name in snapshot_before if isinstance(name, str)}
+
+                sorted_candidates: list[tuple[int, str, dict[str, object]]] = []
+                for responder, responder_info in turn_actions.items():
+                    if responder == player:
+                        continue
+                    responder_index_raw = responder_info.get("index")
+                    try:
+                        responder_index = int(responder_index_raw)
+                    except (TypeError, ValueError):
+                        responder_index = None
+                    sorted_candidates.append((responder_index if responder_index is not None else 10_000_000, responder, responder_info))
+                sorted_candidates.sort(key=lambda item: item[0])
+
+                behind_responses: list[dict[str, object]] = []
+                for _, responder, responder_info in sorted_candidates:
+                    responder_index_raw = responder_info.get("index")
+                    try:
+                        responder_index = int(responder_index_raw)
+                    except (TypeError, ValueError):
+                        responder_index = None
+                    if actor_index is not None and responder_index is not None and responder_index <= actor_index:
+                        continue
+                    if snapshot_before_set and responder not in snapshot_before_set:
+                        continue
+                    response_code = responder_info.get("code")
+                    response_type = _normalise_turn_response_code(response_code)
+                    if response_type is None:
+                        continue
+
+                    amount_response = float(responder_info.get("amount") or 0.0)
+                    pot_before_response = float(responder_info.get("pot_before") or 0.0)
+                    ratio_response = (amount_response / pot_before_response) if pot_before_response > 0 else 0.0
+                    bet_amount_bb_response = (amount_response / big_blind) if big_blind else 0.0
+                    is_all_in_response = bool(responder_info.get("is_all_in"))
+                    is_one_bb_response = response_code in {"bet", "raise"} and math.isfinite(big_blind) and abs(amount_response - big_blind) <= tolerance
+
+                    bucket_key_response: Optional[str] = None
+                    bucket_keys_response: list[str] = []
+                    if response_code in {"bet", "raise"}:
+                        bucket = bucket_for_ratio(ratio_response)
+                        bucket_key_response = bucket.key if bucket is not None else None
+                        bucket_payload = {
+                            "bucket_key": bucket_key_response,
+                            "ratio": ratio_response,
+                            "is_check": False,
+                            "is_all_in": is_all_in_response,
+                            "is_one_bb": is_one_bb_response,
+                        }
+                        bucket_keys_response = bucket_keys_for_event(bucket_payload)
+
+                    classification = player_classifications.get(responder)
+                    hand_primary = classification.primary if classification else None
+                    has_flush_draw = bool(classification and getattr(classification, "has_flush_draw", False))
+                    has_oesd_dg = bool(classification and getattr(classification, "has_oesd_dg", False))
+                    relative_snapshot = snapshot_before_set or turn_active_players
+                    responder_relative = _relative_position_label(
+                        responder,
+                        relative_snapshot,
+                        position_index,
+                    )
+
+                    behind_responses.append(
+                        {
+                            "seat_label": position_labels.get(responder, "UNKNOWN"),
+                            "relative_position": responder_relative,
+                            "response_type": response_type,
+                            "bucket_key": bucket_key_response,
+                            "bucket_keys": bucket_keys_response,
+                            "ratio": ratio_response,
+                            "bet_amount_bb": bet_amount_bb_response,
+                            "is_all_in": is_all_in_response,
+                            "is_one_bb": is_one_bb_response,
+                            "hand_primary": hand_primary,
+                            "has_flush_draw": has_flush_draw,
+                            "has_oesd_dg": has_oesd_dg,
+                            "hole_cards_known": bool(classification),
+                        }
+                    )
+
                 event_record = {
                     "line_key": computed_line_key,
                     "response_type": info["response_type"],
@@ -784,6 +891,7 @@ def _line_events_from_hand_history(
                     "players_dealt": players_dealt,
                     "players_remaining": len(turn_active_players),
                     "relative_position": relative_position,
+                    "actor_seat": position_labels.get(player, "UNKNOWN"),
                     "preflop_aggression_level": preflop_raise_count,
                     "all_in_called": bool(bucket and bucket.key == "all_in" and outcome in {"call", "raise"}) if suffix == "b" else False,
                     "effective_stack_bb": effective_stack_bb,
@@ -793,6 +901,8 @@ def _line_events_from_hand_history(
                     "is_check": suffix == "x",
                     "is_one_bb": is_one_bb,
                     "is_all_in": is_all_in,
+                    "preflop_bucket_key": preflop_buckets.get(player),
+                    "behind_responses": behind_responses,
                 }
                 events.append(event_record)
 
@@ -852,6 +962,15 @@ def _resolve_bet_outcome(actions: Sequence[ET.Element], bettor: str) -> str:
     if has_call:
         return "call"
     return outcome
+
+
+def _normalise_turn_response_code(code: Optional[object]) -> Optional[str]:
+    if code is None:
+        return None
+    text = str(code).lower()
+    if text in {"bet", "raise", "call", "check", "fold"}:
+        return text
+    return None
 
 
 __all__ = [

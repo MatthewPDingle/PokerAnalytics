@@ -301,4 +301,4 @@ def _response_type_rank(value: str) -> int:
 
 
 __all__ = ["load_line_explorer", "build_line_explorer_payload"]
-CURRENT_VERSION = 3
+CURRENT_VERSION = 6

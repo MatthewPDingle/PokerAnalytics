@@ -148,6 +148,16 @@ export type HighlightBucketContext = {
   filterId?: string;
 };
 
+type HighlightBucketDescriptor = {
+  bucketLabel: string;
+  bucketKey?: string;
+  filterId?: string;
+  amount: number;
+  ratio: number | null;
+  isAllIn: boolean;
+  isOneBB: boolean;
+};
+
 type HighlightAnalysis = {
   filters: HighlightFilters;
   highlightSeat: SeatState;
@@ -241,11 +251,7 @@ const BUCKET_REPRESENTATIVE_RATIO: Record<string, number> = {
   pct_40_60: 0.5,
   pct_60_80: 0.7,
   pct_80_100: 0.9,
-  pct_100_plus: 1.125,
-  pct_125_200: 1.6,
-  pct_200_300: 2.5,
-  pct_300_plus: 3.5,
-  pct_125_plus: 1.5,
+  pct_100_plus: 1.6,
   all_in: 3.5,
   one_bb: 1.0,
 };
@@ -1236,14 +1242,10 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions, onHighlightConte
       streetSummaries.set(street, { steps });
     });
 
-    let highlightTargetEntry: StepFilterSummary | undefined;
-    let highlightConsideredSteps: StepFilterSummary[] = [];
-    let highlightBetDescriptor:
-      | { bucket: string; amount: number; ratio: number | null; isAllIn: boolean; isOneBB: boolean }
-      | null = null;
-    let highlightFacingDescriptor:
-      | { bucket: string; amount: number; ratio: number | null; isAllIn: boolean; isOneBB: boolean }
-      | null = null;
+let highlightTargetEntry: StepFilterSummary | undefined;
+let highlightConsideredSteps: StepFilterSummary[] = [];
+let highlightBetDescriptor: HighlightBucketDescriptor | null = null;
+let highlightFacingDescriptor: HighlightBucketDescriptor | null = null;
 
     const buildStreetFilters = (street: Street): DerivedFilter[] => {
       const summary = streetSummaries.get(street);
@@ -1349,12 +1351,14 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions, onHighlightConte
         });
 
         if (street === highlight.street && snapshot) {
+          const bucketKey = bucketKeyFromLabel(betBucket.bucket);
           if (betBucket.label === 'Facing Bet Bucket') {
             const amount = Math.max(snapshot.toCall ?? 0, snapshot.resultAdded ?? 0);
             const potBefore = snapshot.potBefore ?? 0;
             const ratio = potBefore > EPSILON ? amount / potBefore : null;
             highlightFacingDescriptor = {
-              bucket: betBucket.bucket,
+              bucketLabel: betBucket.bucket,
+              bucketKey,
               filterId,
               amount,
               ratio,
@@ -1368,7 +1372,8 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions, onHighlightConte
             const potBefore = snapshot.potBefore ?? 0;
             const ratio = potBefore > EPSILON ? added / potBefore : null;
             highlightBetDescriptor = {
-              bucket: betBucket.bucket,
+              bucketLabel: betBucket.bucket,
+              bucketKey,
               filterId,
               amount: added,
               ratio,
@@ -1398,7 +1403,8 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions, onHighlightConte
             });
             if (street === highlight.street) {
               highlightFacingDescriptor = {
-                bucket,
+                bucketLabel: bucket,
+                bucketKey: bucketKeyFromLabel(bucket),
                 filterId,
                 amount: facing,
                 ratio,
@@ -1627,31 +1633,33 @@ const ActionMatrixComposer = ({ state, dispatch, bucketOptions, onHighlightConte
       category.filters.forEach((filter) => allFilterIds.add(filter.id));
     });
 
-    const facing =
-      highlightFacingDescriptor && highlightFacingDescriptor.bucket
-        ? {
-            bucketLabel: highlightFacingDescriptor.bucket,
-            bucketKey: bucketKeyFromLabel(highlightFacingDescriptor.bucket),
-            amount: highlightFacingDescriptor.amount,
-            ratio: highlightFacingDescriptor.ratio,
-            isAllIn: highlightFacingDescriptor.isAllIn,
-            isOneBB: highlightFacingDescriptor.isOneBB,
-            filterId: highlightFacingDescriptor.filterId,
-          }
-        : undefined;
+    let facing: HighlightBucketContext | undefined;
+    if (highlightFacingDescriptor !== null) {
+      const descriptor: HighlightBucketDescriptor = highlightFacingDescriptor;
+      facing = {
+        bucketLabel: descriptor.bucketLabel,
+        bucketKey: descriptor.bucketKey,
+        amount: descriptor.amount,
+        ratio: descriptor.ratio,
+        isAllIn: descriptor.isAllIn,
+        isOneBB: descriptor.isOneBB,
+        filterId: descriptor.filterId,
+      };
+    }
 
-    const bet =
-      highlightBetDescriptor && highlightBetDescriptor.bucket
-        ? {
-            bucketLabel: highlightBetDescriptor.bucket,
-            bucketKey: bucketKeyFromLabel(highlightBetDescriptor.bucket),
-            amount: highlightBetDescriptor.amount,
-            ratio: highlightBetDescriptor.ratio,
-            isAllIn: highlightBetDescriptor.isAllIn,
-            isOneBB: highlightBetDescriptor.isOneBB,
-            filterId: highlightBetDescriptor.filterId,
-          }
-        : undefined;
+    let bet: HighlightBucketContext | undefined;
+    if (highlightBetDescriptor !== null) {
+      const descriptor: HighlightBucketDescriptor = highlightBetDescriptor;
+      bet = {
+        bucketLabel: descriptor.bucketLabel,
+        bucketKey: descriptor.bucketKey,
+        amount: descriptor.amount,
+        ratio: descriptor.ratio,
+        isAllIn: descriptor.isAllIn,
+        isOneBB: descriptor.isOneBB,
+        filterId: descriptor.filterId,
+      };
+    }
 
     const canCheck = (highlightTargetEntry.snapshot?.toCall ?? 0) <= EPSILON;
     const actionType = highlightTargetEntry.action?.action ?? null;
@@ -2298,15 +2306,9 @@ const SeatActionModal = ({ state, isOpen, onClose, bucketOptions, onSave }: Seat
       }
 
       if (isPreflopStreet) {
-        if (choice === 'call') {
-          sizing = undefined;
-          plannedContribution = contribution + toCall;
-          amountValue = contribution + toCall;
-        } else {
-          const incremental = Math.max(amountValue - contribution, 0);
-          sizing = { kind: 'bb_multiple', value: incremental };
-          plannedContribution = amountValue;
-        }
+        const incremental = Math.max(amountValue - contribution, 0);
+        sizing = { kind: 'bb_multiple', value: incremental };
+        plannedContribution = amountValue;
       } else {
         const ratioValue = potBefore > 0 && amountValue > 0 ? amountValue / potBefore : amountValue;
         sizing = { kind: 'pot_ratio', value: ratioValue };

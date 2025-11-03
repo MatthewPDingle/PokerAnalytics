@@ -17,7 +17,6 @@ class BucketMeta:
 BUCKET_METADATA: Sequence[BucketMeta] = (BucketMeta(key="check", label="Check"),) + tuple(
     BucketMeta(key=bucket.key, label=bucket.label) for bucket in BET_SIZE_BUCKETS
 ) + (
-    BucketMeta(key="pct_125_plus", label="125%+"),
     BucketMeta(key="all_in", label="All-In"),
     BucketMeta(key="one_bb", label="1 BB"),
 )
@@ -43,6 +42,10 @@ def bucket_keys_for_event(event: Mapping[str, object]) -> list[str]:
     if base_key:
         keys.append(base_key)
 
+    ratio_bucket = bucket_for_ratio(ratio)
+    if ratio_bucket is not None and ratio_bucket.key and ratio_bucket.key != base_key:
+        keys.append(ratio_bucket.key)
+
     if bool(event.get("is_check")):
         keys.append("check")
 
@@ -50,9 +53,6 @@ def bucket_keys_for_event(event: Mapping[str, object]) -> list[str]:
         keys.append("all_in")
     if bool(event.get("is_one_bb")):
         keys.append("one_bb")
-
-    if _is_ratio_125_plus(ratio, base_key):
-        keys.append("pct_125_plus")
 
     return _dedupe_preserving_order(keys)
 
@@ -63,12 +63,6 @@ def _extract_ratio(event: Mapping[str, object]) -> Optional[float]:
         return float(ratio_raw) if ratio_raw is not None else None
     except (TypeError, ValueError):
         return None
-
-
-def _is_ratio_125_plus(ratio: Optional[float], base_key: Optional[str]) -> bool:
-    if ratio is not None:
-        return ratio >= 1.25
-    return base_key in {"pct_125_200", "pct_200_300", "pct_300_plus"}
 
 
 def _dedupe_preserving_order(keys: Iterable[str]) -> list[str]:

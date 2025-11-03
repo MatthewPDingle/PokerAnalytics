@@ -10,8 +10,16 @@ from typing import Dict, List, MutableMapping, Optional, Sequence, Tuple
 
 from poker_analytics.config import build_data_paths
 from poker_analytics.data.stakes import StakePolicy
+from poker_analytics.data.textures import FLOP_TEXTURE_SPECS, texture_keys
 from poker_analytics.services.flop_bucket_utils import BUCKET_KEYS, BUCKET_METADATA, bucket_keys_for_event
 from poker_analytics.services.flop_response_matrix_builder import collect_flop_bet_events
+from poker_analytics.services.flop_preflop_utils import (
+    PREFLOP_ANY_KEY,
+    PREFLOP_OPTIONS,
+    PREFLOP_ORDER,
+    preflop_bucket,
+    preflop_keys,
+)
 
 BET_TYPE_OPTIONS: Sequence[Mapping[str, str]] = (
     {"key": "cbet", "label": "Continuation Bet"},
@@ -30,6 +38,16 @@ POSITION_OPTIONS: Sequence[Mapping[str, str]] = (
 )
 
 POSITION_ORDER = {option["key"]: index for index, option in enumerate(POSITION_OPTIONS)}
+
+TEXTURE_ANY_KEY = "any"
+TEXTURE_OPTIONS: Sequence[Mapping[str, str]] = [
+    {"key": TEXTURE_ANY_KEY, "label": "All Textures"},
+    *(
+        {"key": spec.key, "label": spec.title}
+        for spec in FLOP_TEXTURE_SPECS
+    ),
+]
+TEXTURE_ORDER = {option["key"]: index for index, option in enumerate(TEXTURE_OPTIONS)}
 
 LEGACY_CACHE_FILENAMES: Mapping[str, Sequence[str]] = {
     "cbet": ("flop_cbet_events.json", "cbet_events.json"),
@@ -74,7 +92,13 @@ def load_flop_response_matrix() -> dict:
 def build_flop_response_payload(events: Iterable[Mapping[str, object]]) -> dict:
     """Build the response payload from an iterable of raw events."""
 
-    scenarios, player_counts, hero_positions = _aggregate_events(events)
+    (
+        scenarios,
+        player_counts,
+        hero_positions,
+        texture_keys_seen,
+        preflop_keys_seen,
+    ) = _aggregate_events(events)
     payload = {
         "version": CURRENT_VERSION,
         "bucket_order": [meta.__dict__ for meta in BUCKET_METADATA],
@@ -82,14 +106,24 @@ def build_flop_response_payload(events: Iterable[Mapping[str, object]]) -> dict:
         "positions": list(POSITION_OPTIONS),
         "player_counts": sorted(player_counts),
         "hero_positions": hero_positions,
+        "textures": [
+            option
+            for option in TEXTURE_OPTIONS
+            if option["key"] == TEXTURE_ANY_KEY or option["key"] in texture_keys_seen
+        ],
+        "preflop_categories": [
+            option
+            for option in PREFLOP_OPTIONS
+            if option["key"] == PREFLOP_ANY_KEY or option["key"] in preflop_keys_seen
+        ],
         "scenarios": scenarios,
     }
     return payload
 
 
-def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict], List[int], List[str]]:
+def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict], List[int], List[str], set[str], set[str]]:
     aggregate: MutableMapping[
-        Tuple[str, str, str, int],
+        Tuple[str, str, str, int, str, str],
         MutableMapping[str, Dict[str, float]],
     ] = defaultdict(
         lambda: {
@@ -109,6 +143,8 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
     )
     player_counts: set[int] = set()
     hero_positions: set[str] = set()
+    texture_keys_seen: set[str] = set()
+    preflop_keys_seen: set[str] = set()
 
     for event in events:
         hero_position = event.get("hero_position")
@@ -137,6 +173,10 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
         if not bucket_keys:
             continue
 
+        event_texture_keys = _event_texture_keys(event)
+        texture_keys_for_event = [TEXTURE_ANY_KEY, *event_texture_keys] if event_texture_keys else [TEXTURE_ANY_KEY]
+        preflop_keys_for_event = preflop_keys(event.get("preflop_aggression_level"))
+
         outcome = event.get("villain_outcome")
         if not isinstance(outcome, str):
             responses = event.get("responses") or []
@@ -155,35 +195,42 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
         share_all = (total_all_bb / pot_before_bb) if pot_before_bb > 0 else 0.0
         breakeven_pct = (ratio_value / (1.0 + ratio_value) * 100.0) if ratio_value > 0 else 0.0
 
-        scenario_key = (hero_position, bet_type, position, player_count)
-        bucket_map = aggregate[scenario_key]
-
-        for bucket_key in bucket_keys:
-            bucket_metrics = bucket_map[bucket_key]
-            bucket_metrics["events"] += 1
-            if outcome == "raise":
-                bucket_metrics["raise_events"] += 1
-            elif outcome == "call":
-                bucket_metrics["call_events"] += 1
-            else:
-                bucket_metrics["fold_events"] += 1
-            bucket_metrics["ratio_sum"] += ratio_value
-            bucket_metrics["total_added_flop_bb"] += total_flop_bb
-            bucket_metrics["total_added_all_bb"] += total_all_bb
-            bucket_metrics["share_all_sum"] += share_all
-            bucket_metrics["breakeven_sum"] += breakeven_pct
-
         if player_count:
             player_counts.add(player_count)
+        texture_keys_seen.update(event_texture_keys)
+        preflop_bucket_key = preflop_bucket(event.get("preflop_aggression_level"))
+        preflop_keys_seen.add(preflop_bucket_key)
+
+        for texture_key in texture_keys_for_event:
+            for preflop_key in preflop_keys_for_event:
+                scenario_key = (hero_position, bet_type, position, player_count, texture_key, preflop_key)
+                bucket_map = aggregate[scenario_key]
+
+                for bucket_key in bucket_keys:
+                    bucket_metrics = bucket_map[bucket_key]
+                    bucket_metrics["events"] += 1
+                    if outcome == "raise":
+                        bucket_metrics["raise_events"] += 1
+                    elif outcome == "call":
+                        bucket_metrics["call_events"] += 1
+                    else:
+                        bucket_metrics["fold_events"] += 1
+                    bucket_metrics["ratio_sum"] += ratio_value
+                    bucket_metrics["total_added_flop_bb"] += total_flop_bb
+                    bucket_metrics["total_added_all_bb"] += total_all_bb
+                    bucket_metrics["share_all_sum"] += share_all
+                    bucket_metrics["breakeven_sum"] += breakeven_pct
 
     scenarios = []
-    for (hero_position, bet_type, position, player_count), bucket_map in sorted(
+    for (hero_position, bet_type, position, player_count, texture_key, preflop_key), bucket_map in sorted(
         aggregate.items(),
         key=lambda item: (
             HERO_POSITION_RANK.get(item[0][0], len(HERO_POSITION_RANK)),
             BET_TYPE_ORDER.get(item[0][1], len(BET_TYPE_ORDER)),
             POSITION_ORDER.get(item[0][2], len(POSITION_ORDER)),
             item[0][3],
+            TEXTURE_ORDER.get(item[0][4], len(TEXTURE_ORDER)),
+            PREFLOP_ORDER.get(item[0][5], len(PREFLOP_ORDER)),
         ),
     ):
         scenarios.append(
@@ -192,6 +239,8 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
                 "bet_type": bet_type,
                 "position": position,
                 "player_count": player_count,
+                "texture_key": texture_key,
+                "preflop_key": preflop_key,
                 "metrics": [
                     {
                         "bucket_key": meta.key,
@@ -236,7 +285,17 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
         key=lambda value: HERO_POSITION_RANK.get(value, len(HERO_POSITION_RANK)),
     )
 
-    return scenarios, sorted(player_counts), hero_positions_sorted
+    return scenarios, sorted(player_counts), hero_positions_sorted, texture_keys_seen, preflop_keys_seen
+
+
+def _event_texture_keys(event: Mapping[str, object]) -> list[str]:
+    raw = event.get("flop_texture_keys")
+    if isinstance(raw, (list, tuple, set)):
+        textures = [str(value) for value in raw if isinstance(value, str) and value]
+        if textures:
+            return textures
+    flop_text = event.get("flop_cards") or event.get("board_flop")
+    return texture_keys(flop_text)
 
 
 def _resolve_outcome(responses: object) -> str:
@@ -346,12 +405,15 @@ def load_flop_pot_contribution() -> dict:
 
 
 def build_flop_pot_contribution_payload(events: Iterable[Mapping[str, object]]) -> dict:
-    scenarios_map: MutableMapping[Tuple[str, str, str, int], MutableMapping[str, Dict[str, float]]] = defaultdict(
-        lambda: {key: {"events": 0, "sum_added_bb": 0.0} for key in BUCKET_KEYS}
-    )
+    scenarios_map: MutableMapping[
+        Tuple[str, str, str, int, str, str],
+        MutableMapping[str, Dict[str, float]],
+    ] = defaultdict(lambda: {key: {"events": 0, "sum_added_bb": 0.0} for key in BUCKET_KEYS})
 
     player_counts: set[int] = set()
     hero_positions: set[str] = set()
+    texture_keys_seen: set[str] = set()
+    preflop_keys_seen: set[str] = set()
 
     for event in events:
         added_bb_raw = event.get("total_added_all_bb")
@@ -390,20 +452,32 @@ def build_flop_pot_contribution_payload(events: Iterable[Mapping[str, object]]) 
         if not bucket_keys:
             continue
 
-        bucket_map = scenarios_map[(hero_position, bet_type, position, player_count)]
-        for bucket_key in bucket_keys:
-            bucket_entry = bucket_map[bucket_key]
-            bucket_entry["events"] += 1
-            bucket_entry["sum_added_bb"] += added_bb
+        event_texture_keys = _event_texture_keys(event)
+        texture_keys_seen.update(event_texture_keys)
+        texture_keys_for_event = [TEXTURE_ANY_KEY, *event_texture_keys] if event_texture_keys else [TEXTURE_ANY_KEY]
+
+        preflop_bucket_key = preflop_bucket(event.get("preflop_aggression_level"))
+        preflop_keys_seen.add(preflop_bucket_key)
+        preflop_keys_for_event = preflop_keys(event.get("preflop_aggression_level"))
+
+        for texture_key in texture_keys_for_event:
+            for preflop_key in preflop_keys_for_event:
+                bucket_map = scenarios_map[(hero_position, bet_type, position, player_count, texture_key, preflop_key)]
+                for bucket_key in bucket_keys:
+                    bucket_entry = bucket_map[bucket_key]
+                    bucket_entry["events"] += 1
+                    bucket_entry["sum_added_bb"] += added_bb
 
     scenarios = []
-    for (hero_position, bet_type, position, player_count), bucket_map in sorted(
+    for (hero_position, bet_type, position, player_count, texture_key, preflop_key), bucket_map in sorted(
         scenarios_map.items(),
         key=lambda item: (
             HERO_POSITION_RANK.get(item[0][0], len(HERO_POSITION_RANK)),
             BET_TYPE_ORDER.get(item[0][1], len(BET_TYPE_ORDER)),
             POSITION_ORDER.get(item[0][2], len(POSITION_ORDER)),
             item[0][3],
+            TEXTURE_ORDER.get(item[0][4], len(TEXTURE_ORDER)),
+            PREFLOP_ORDER.get(item[0][5], len(PREFLOP_ORDER)),
         ),
     ):
         scenarios.append(
@@ -412,6 +486,8 @@ def build_flop_pot_contribution_payload(events: Iterable[Mapping[str, object]]) 
                 "bet_type": bet_type,
                 "position": position,
                 "player_count": player_count,
+                "texture_key": texture_key,
+                "preflop_key": preflop_key,
                 "metrics": [
                     {
                         "bucket_key": meta.key,
@@ -438,6 +514,16 @@ def build_flop_pot_contribution_payload(events: Iterable[Mapping[str, object]]) 
             hero_positions,
             key=lambda value: HERO_POSITION_RANK.get(value, len(HERO_POSITION_RANK)),
         ),
+        "textures": [
+            option
+            for option in TEXTURE_OPTIONS
+            if option["key"] == TEXTURE_ANY_KEY or option["key"] in texture_keys_seen
+        ],
+        "preflop_categories": [
+            option
+            for option in PREFLOP_OPTIONS
+            if option["key"] == PREFLOP_ANY_KEY or option["key"] in preflop_keys_seen
+        ],
         "scenarios": scenarios,
     }
 
@@ -448,4 +534,4 @@ __all__ = [
     "load_flop_pot_contribution",
     "build_flop_pot_contribution_payload",
 ]
-CURRENT_VERSION = 4
+CURRENT_VERSION = 8

@@ -13,7 +13,15 @@ from poker_analytics.data.flop_hand_categories import (
     PRIMARY_HAND_TYPES,
 )
 from poker_analytics.data.stakes import StakePolicy
+from poker_analytics.data.textures import FLOP_TEXTURE_SPECS, texture_keys
 from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, BUCKET_KEYS, bucket_keys_for_event
+from poker_analytics.services.flop_preflop_utils import (
+    PREFLOP_ANY_KEY,
+    PREFLOP_OPTIONS,
+    PREFLOP_ORDER,
+    preflop_bucket,
+    preflop_keys,
+)
 from poker_analytics.services.flop_response_matrix_builder import collect_flop_bet_events
 
 HAND_TYPE_ORDER: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES)
@@ -42,6 +50,16 @@ HERO_POSITION_ORDER: Sequence[str] = [
     "BTN",
     "UNKNOWN",
 ]
+
+TEXTURE_ANY_KEY = "any"
+TEXTURE_OPTIONS: Sequence[Mapping[str, str]] = [
+    {"key": TEXTURE_ANY_KEY, "label": "All Textures"},
+    *(
+        {"key": spec.key, "label": spec.title}
+        for spec in FLOP_TEXTURE_SPECS
+    ),
+]
+TEXTURE_ORDER = {option["key"]: index for index, option in enumerate(TEXTURE_OPTIONS)}
 
 
 def load_flop_hand_matrix() -> dict:
@@ -75,11 +93,13 @@ def load_flop_hand_matrix() -> dict:
 
 
 def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
-    scenario_map: Dict[Tuple[str, str, str, int], Dict[str, Dict[str, object]]] = {}
+    scenario_map: Dict[Tuple[str, str, str, int, str, str], Dict[str, Dict[str, object]]] = {}
     hero_positions: set[str] = set()
     bet_types: set[str] = set()
     positions: set[str] = set()
     player_counts: set[int] = set()
+    texture_keys_seen: set[str] = set()
+    preflop_keys_seen: set[str] = set()
 
     for event in events:
         primary = event.get("hand_primary")
@@ -102,8 +122,28 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
         if player_count <= 0:
             continue
 
-        scenario_key = (hero_position, bet_type, in_position, player_count)
-        bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
+        event_texture_keys = _event_texture_keys(event)
+        texture_keys_seen.update(event_texture_keys)
+        texture_keys_for_event = [TEXTURE_ANY_KEY, *event_texture_keys] if event_texture_keys else [TEXTURE_ANY_KEY]
+
+        preflop_bucket_key = preflop_bucket(event.get("preflop_aggression_level"))
+        preflop_keys_seen.add(preflop_bucket_key)
+        preflop_keys_for_event = preflop_keys(event.get("preflop_aggression_level"))
+
+        for texture_key in texture_keys_for_event:
+            for preflop_key in preflop_keys_for_event:
+                scenario_key = (hero_position, bet_type, in_position, player_count, texture_key, preflop_key)
+                bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
+                for bucket_key in bucket_keys:
+                    stats = bucket_map.get(bucket_key)
+                    if stats is None:
+                        continue
+                    stats["events"] += 1
+                    stats["categories"][primary] += 1
+                    if bool(event.get("has_flush_draw")):
+                        stats["categories"]["Flush Draw"] += 1
+                    if bool(event.get("has_oesd_dg")):
+                        stats["categories"]["OESD/DG"] += 1
 
         hero_positions.add(hero_position)
         if bet_type:
@@ -111,25 +151,16 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
         positions.add(in_position)
         player_counts.add(player_count)
 
-        for bucket_key in bucket_keys:
-            stats = bucket_map.get(bucket_key)
-            if stats is None:
-                continue
-            stats["events"] += 1
-            stats["categories"][primary] += 1
-            if bool(event.get("has_flush_draw")):
-                stats["categories"]["Flush Draw"] += 1
-            if bool(event.get("has_oesd_dg")):
-                stats["categories"]["OESD/DG"] += 1
-
     scenario_payload: List[dict] = []
-    for (hero_position, bet_type, in_position, player_count), bucket_map in sorted(
+    for (hero_position, bet_type, in_position, player_count, texture_key, preflop_key), bucket_map in sorted(
         scenario_map.items(),
         key=lambda item: (
             _hero_position_rank(item[0][0]),
             _bet_type_rank(item[0][1]),
             0 if item[0][2] == "IP" else 1,
             item[0][3],
+            TEXTURE_ORDER.get(item[0][4], len(TEXTURE_ORDER)),
+            PREFLOP_ORDER.get(item[0][5], len(PREFLOP_ORDER)),
         ),
     ):
         metrics = []
@@ -149,6 +180,8 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
                 "bet_type": bet_type,
                 "position": in_position,
                 "player_count": player_count,
+                "texture_key": texture_key,
+                "preflop_key": preflop_key,
                 "metrics": metrics,
             }
         )
@@ -195,6 +228,16 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
         "positions": position_options,
         "hero_positions": hero_positions_ordered,
         "player_counts": sorted(player_counts),
+        "textures": [
+            option
+            for option in TEXTURE_OPTIONS
+            if option["key"] == TEXTURE_ANY_KEY or option["key"] in texture_keys_seen
+        ],
+        "preflop_categories": [
+            option
+            for option in PREFLOP_OPTIONS
+            if option["key"] == PREFLOP_ANY_KEY or option["key"] in preflop_keys_seen
+        ],
         "scenarios": scenario_payload,
     }
 
@@ -217,6 +260,16 @@ def _bet_type_rank(key: str) -> int:
         return len(ordering)
 
 
+def _event_texture_keys(event: Mapping[str, object]) -> list[str]:
+    raw = event.get("flop_texture_keys")
+    if isinstance(raw, (list, tuple, set)):
+        textures = [str(value) for value in raw if isinstance(value, str) and value]
+        if textures:
+            return textures
+    flop_cards = event.get("flop_cards") or event.get("board_flop")
+    return texture_keys(flop_cards)
+
+
 def _hero_position_rank(label: str) -> int:
     try:
         return HERO_POSITION_ORDER.index(label)
@@ -225,4 +278,4 @@ def _hero_position_rank(label: str) -> int:
 
 
 __all__ = ["load_flop_hand_matrix"]
-CURRENT_VERSION = 1
+CURRENT_VERSION = 5

@@ -24,6 +24,8 @@ export type FlopResponseScenario = {
   betType: string;
   position: 'IP' | 'OOP';
   playerCount: number;
+  textureKey: string;
+  preflopKey: string;
   metrics: FlopResponseMetric[];
 };
 
@@ -38,11 +40,15 @@ type RawPayload = {
   positions: SelectOption[];
   player_counts: number[];
   hero_positions: string[];
+  textures: SelectOption[];
+  preflop_categories: SelectOption[];
   scenarios: Array<{
     hero_position: string;
     bet_type: string;
     position: 'IP' | 'OOP';
     player_count: number;
+    texture_key: string;
+    preflop_key: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -65,11 +71,7 @@ const SAMPLE_BUCKET_ORDER: FlopBucketMeta[] = [
   { key: 'pct_40_60', label: '40-60%' },
   { key: 'pct_60_80', label: '60-80%' },
   { key: 'pct_80_100', label: '80-100%' },
-  { key: 'pct_100_125', label: '100-125%' },
-  { key: 'pct_125_200', label: '125-200%' },
-  { key: 'pct_200_300', label: '200-300%' },
-  { key: 'pct_300_plus', label: '300%+' },
-  { key: 'pct_125_plus', label: '125%+' },
+  { key: 'pct_100_plus', label: '100%+' },
   { key: 'all_in', label: 'All-In' },
   { key: 'one_bb', label: '1 BB' },
 ];
@@ -80,6 +82,8 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
     betType: 'cbet',
     position: 'IP',
     playerCount: 2,
+    textureKey: 'any',
+    preflopKey: 'any',
     metrics: SAMPLE_BUCKET_ORDER.map((bucket) => {
       switch (bucket.key) {
         case 'pct_40_60':
@@ -124,47 +128,19 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
             avgShareAll: 2.4,
             avgBreakevenPct: 47.4,
           };
-        case 'pct_100_125':
+        case 'pct_100_plus':
           return {
             bucketKey: bucket.key,
             bucketLabel: bucket.label,
-            events: 120,
-            foldEvents: 45,
-            callEvents: 55,
-            raiseEvents: 20,
-            avgRatio: 1.1,
-            avgAddedFlopBb: 5.2,
-            avgAddedAllBb: 8.8,
-            avgShareAll: 2.8,
-            avgBreakevenPct: 52.4,
-          };
-        case 'pct_125_200':
-          return {
-            bucketKey: bucket.key,
-            bucketLabel: bucket.label,
-            events: 90,
-            foldEvents: 35,
-            callEvents: 45,
-            raiseEvents: 10,
+            events: 150,
+            foldEvents: 65,
+            callEvents: 60,
+            raiseEvents: 25,
             avgRatio: 1.6,
-            avgAddedFlopBb: 6.0,
-            avgAddedAllBb: 10.5,
-            avgShareAll: 3.4,
+            avgAddedFlopBb: 6.2,
+            avgAddedAllBb: 10.8,
+            avgShareAll: 3.1,
             avgBreakevenPct: 61.5,
-          };
-        case 'pct_125_plus':
-          return {
-            bucketKey: bucket.key,
-            bucketLabel: bucket.label,
-            events: 90,
-            foldEvents: 35,
-            callEvents: 45,
-            raiseEvents: 10,
-            avgRatio: 2.5,
-            avgAddedFlopBb: 6.5,
-            avgAddedAllBb: 12.0,
-            avgShareAll: 3.8,
-            avgBreakevenPct: 71.4,
           };
         case 'all_in':
           return {
@@ -216,6 +192,8 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
     betType: 'donk',
     position: 'OOP',
     playerCount: 3,
+    textureKey: 'any',
+    preflopKey: 'any',
     metrics: SAMPLE_BUCKET_ORDER.map((bucket) => {
       if (bucket.key === 'pct_25_40') {
         return {
@@ -230,21 +208,6 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
           avgAddedAllBb: 4.5,
           avgShareAll: 1.5,
           avgBreakevenPct: 23.1,
-        };
-      }
-      if (bucket.key === 'pct_125_plus') {
-        return {
-          bucketKey: bucket.key,
-          bucketLabel: bucket.label,
-          events: 0,
-          foldEvents: 0,
-          callEvents: 0,
-          raiseEvents: 0,
-          avgRatio: 0,
-          avgAddedFlopBb: 0,
-          avgAddedAllBb: 0,
-          avgShareAll: 0,
-          avgBreakevenPct: 0,
         };
       }
       return {
@@ -282,6 +245,8 @@ type HookState = {
   positions: SelectOption[];
   playerCounts: number[];
   heroPositions: string[];
+  textures: SelectOption[];
+  preflopOptions: SelectOption[];
   loading: boolean;
   error: string | null;
   usingSample: boolean;
@@ -294,6 +259,8 @@ const initialState: HookState = {
   positions: [],
   playerCounts: [],
   heroPositions: [],
+  textures: [],
+  preflopOptions: [],
   loading: true,
   error: null,
   usingSample: false,
@@ -305,6 +272,8 @@ const transformPayload = (payload: RawPayload): HookState => {
     betType: scenario.bet_type,
     position: scenario.position,
     playerCount: scenario.player_count,
+    textureKey: scenario.texture_key,
+    preflopKey: scenario.preflop_key,
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,
@@ -327,6 +296,18 @@ const transformPayload = (payload: RawPayload): HookState => {
     positions: payload.positions,
     playerCounts: payload.player_counts,
     heroPositions: payload.hero_positions,
+    textures:
+      payload.textures ?? [
+        { key: 'any', label: 'All Textures' },
+        { key: 'rainbow', label: 'Rainbow Flops' },
+      ],
+    preflopOptions:
+      payload.preflop_categories ?? [
+        { key: 'any', label: 'All Preflop Pots' },
+        { key: 'limped', label: 'Limped Pot (No Raise)' },
+        { key: 'single_raise', label: 'Single-Raise Pot' },
+        { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+      ],
     loading: false,
     error: null,
     usingSample: false,
@@ -340,6 +321,16 @@ const SAMPLE_STATE: HookState = {
   positions: SAMPLE_POSITIONS,
   playerCounts: [2, 3],
   heroPositions: ['SB', 'BB', 'UTG', 'BTN'],
+  textures: [
+    { key: 'any', label: 'All Textures' },
+    { key: 'rainbow', label: 'Rainbow Flops' },
+  ],
+  preflopOptions: [
+    { key: 'any', label: 'All Preflop Pots' },
+    { key: 'limped', label: 'Limped Pot (No Raise)' },
+    { key: 'single_raise', label: 'Single-Raise Pot' },
+    { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+  ],
   loading: false,
   error: 'Using sample flop response data (API unavailable).',
   usingSample: true,

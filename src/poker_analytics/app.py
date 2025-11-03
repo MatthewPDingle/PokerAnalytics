@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -9,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from poker_analytics.api import core_router, performance_router, preflop_router
 from poker_analytics.config import REPO_ROOT
+from poker_analytics.services.cache_refresh import refresh_flop_caches
 
 
 def create_app() -> FastAPI:
@@ -25,6 +28,14 @@ def create_app() -> FastAPI:
     app.include_router(core_router)
     app.include_router(preflop_router)
     app.include_router(performance_router)
+
+    @app.on_event("startup")
+    async def _refresh_flop_caches() -> None:
+        try:
+            await asyncio.to_thread(refresh_flop_caches)
+        except Exception:  # pragma: no cover - startup resilience
+            # Avoid failing app startup if cache warm-up has issues.
+            pass
 
     dist_dir = REPO_ROOT / "frontend" / "dist"
     if dist_dir.exists():

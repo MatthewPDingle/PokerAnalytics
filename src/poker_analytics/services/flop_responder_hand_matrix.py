@@ -12,7 +12,15 @@ from poker_analytics.data.flop_hand_categories import (
     PRIMARY_HAND_TYPES,
 )
 from poker_analytics.data.stakes import StakePolicy
+from poker_analytics.data.textures import FLOP_TEXTURE_SPECS, texture_keys
 from poker_analytics.services.flop_bucket_utils import BUCKET_METADATA, BUCKET_KEYS, bucket_keys_for_event
+from poker_analytics.services.flop_preflop_utils import (
+    PREFLOP_ANY_KEY,
+    PREFLOP_OPTIONS,
+    PREFLOP_ORDER,
+    preflop_bucket,
+    preflop_keys,
+)
 from poker_analytics.services.flop_response_matrix_builder import collect_flop_bet_events
 
 HAND_TYPE_ORDER: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES)
@@ -32,6 +40,16 @@ HERO_POSITION_ORDER: Sequence[str] = (
     "BTN",
     "UNKNOWN",
 )
+
+TEXTURE_ANY_KEY = "any"
+TEXTURE_OPTIONS: Sequence[Mapping[str, str]] = [
+    {"key": TEXTURE_ANY_KEY, "label": "All Textures"},
+    *(
+        {"key": spec.key, "label": spec.title}
+        for spec in FLOP_TEXTURE_SPECS
+    ),
+]
+TEXTURE_ORDER = {option["key"]: index for index, option in enumerate(TEXTURE_OPTIONS)}
 
 RESPONSE_TYPE_ORDER: Sequence[str] = ("call", "raise")
 RESPONSE_TYPE_LABELS: Mapping[str, str] = {"call": "Call", "raise": "Raise"}
@@ -74,7 +92,7 @@ def load_flop_responder_hand_matrix() -> dict:
 
 def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
     scenario_map: Dict[
-        Tuple[str, str, str, int, str],
+        Tuple[str, str, str, int, str, str],
         MutableMapping[str, Dict[str, object]],
     ] = {}
 
@@ -83,6 +101,8 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
     positions: set[str] = set()
     player_counts: set[int] = set()
     response_types: set[str] = set()
+    texture_keys_seen: set[str] = set()
+    preflop_keys_seen: set[str] = set()
 
     for event in events:
         bucket_keys = bucket_keys_for_event(event)
@@ -104,6 +124,14 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
         if not isinstance(responses, Iterable):
             continue
 
+        event_texture_keys = _event_texture_keys(event)
+        texture_keys_seen.update(event_texture_keys)
+        texture_keys_for_event = [TEXTURE_ANY_KEY, *event_texture_keys] if event_texture_keys else [TEXTURE_ANY_KEY]
+
+        preflop_bucket_key = preflop_bucket(event.get("preflop_aggression_level"))
+        preflop_keys_seen.add(preflop_bucket_key)
+        preflop_keys_for_event = preflop_keys(event.get("preflop_aggression_level"))
+
         for response in responses:
             if not isinstance(response, Mapping):
                 continue
@@ -116,28 +144,38 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
             has_flush_draw = bool(response.get("has_flush_draw"))
             has_oesd_dg = bool(response.get("has_oesd_dg"))
 
-            scenario_key = (hero_position, bet_type, position, player_count, response_type)
-            bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
+            for texture_key in texture_keys_for_event:
+                for preflop_key in preflop_keys_for_event:
+                    scenario_key = (
+                        hero_position,
+                        bet_type,
+                        position,
+                        player_count,
+                        response_type,
+                        texture_key,
+                        preflop_key,
+                    )
+                    bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
 
-            hero_positions.add(hero_position)
-            bet_types.add(bet_type)
-            positions.add(position)
-            player_counts.add(player_count)
-            response_types.add(response_type)
+                    hero_positions.add(hero_position)
+                    bet_types.add(bet_type)
+                    positions.add(position)
+                    player_counts.add(player_count)
+                    response_types.add(response_type)
 
-            for bucket_key in bucket_keys:
-                stats = bucket_map.get(bucket_key)
-                if stats is None:
-                    continue
-                stats["events"] += 1
-                stats["categories"][primary] += 1
-                if has_flush_draw:
-                    stats["categories"]["Flush Draw"] += 1
-                if has_oesd_dg:
-                    stats["categories"]["OESD/DG"] += 1
+                    for bucket_key in bucket_keys:
+                        stats = bucket_map.get(bucket_key)
+                        if stats is None:
+                            continue
+                        stats["events"] += 1
+                        stats["categories"][primary] += 1
+                        if has_flush_draw:
+                            stats["categories"]["Flush Draw"] += 1
+                        if has_oesd_dg:
+                            stats["categories"]["OESD/DG"] += 1
 
     scenarios: List[dict] = []
-    for (hero_position, bet_type, position, player_count, response_type), bucket_map in sorted(
+    for (hero_position, bet_type, position, player_count, response_type, texture_key, preflop_key), bucket_map in sorted(
         scenario_map.items(),
         key=lambda item: (
             _hero_position_rank(item[0][0]),
@@ -145,6 +183,8 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
             _position_rank(item[0][2]),
             item[0][3],
             _response_type_rank(item[0][4]),
+            TEXTURE_ORDER.get(item[0][5], len(TEXTURE_ORDER)),
+            PREFLOP_ORDER.get(item[0][6], len(PREFLOP_ORDER)),
         ),
     ):
         scenarios.append(
@@ -154,6 +194,8 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
                 "position": position,
                 "player_count": player_count,
                 "response_type": response_type,
+                "texture_key": texture_key,
+                "preflop_key": preflop_key,
                 "metrics": [
                     {
                         "bucket_key": meta.key,
@@ -210,6 +252,16 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
         "hero_positions": sorted(hero_positions, key=_hero_position_rank),
         "player_counts": sorted(player_counts),
         "response_types": response_type_options,
+        "textures": [
+            option
+            for option in TEXTURE_OPTIONS
+            if option["key"] == TEXTURE_ANY_KEY or option["key"] in texture_keys_seen
+        ],
+        "preflop_categories": [
+            option
+            for option in PREFLOP_OPTIONS
+            if option["key"] == PREFLOP_ANY_KEY or option["key"] in preflop_keys_seen
+        ],
         "scenarios": scenarios,
     }
 
@@ -252,6 +304,16 @@ def _response_type_rank(value: str) -> int:
         return len(RESPONSE_TYPE_ORDER)
 
 
+def _event_texture_keys(event: Mapping[str, object]) -> list[str]:
+    raw = event.get("flop_texture_keys")
+    if isinstance(raw, (list, tuple, set)):
+        textures = [str(value) for value in raw if isinstance(value, str) and value]
+        if textures:
+            return textures
+    flop_cards = event.get("flop_cards") or event.get("board_flop")
+    return texture_keys(flop_cards)
+
+
 def _normalise_bet_type(value: object) -> str | None:
     if isinstance(value, str):
         lowered = value.strip().lower()
@@ -269,4 +331,4 @@ def _normalise_response_type(value: object) -> str | None:
 
 
 __all__ = ["load_flop_responder_hand_matrix"]
-CURRENT_VERSION = 1
+CURRENT_VERSION = 5

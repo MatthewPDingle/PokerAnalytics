@@ -27,6 +27,11 @@
 - Frontend build: `npm run build` inside `frontend/`.
 - Test suite: `python -m unittest discover -s tests -t .`.
 
+### Cache Refresh Automation
+- The backend clears and rebuilds flop analytics caches automatically on FastAPI startup. Restarting `uvicorn` is enough to pick up new bucket logic and data extracts.
+- Running `npm run dev` (or `npm run build`) triggers the same cache sweep via the `predev`/`prebuild` hooks before Vite starts.
+- Use `python scripts/refresh_flop_caches.py` manually when needed (e.g., CI, ad-hoc smoke tests). Append `--skip-build` to delete without rebuilding, or `--max-hands N` to rebuild from a limited sample.
+
 ## Repository Layout (current & planned)
 ```
 AGENTS.md               # This guide (root locator for notebooks)
@@ -84,10 +89,7 @@ Implementations live in `src/poker_analytics/data/textures.py` (see below) and p
 | `40-60%` | `[0.40, 0.60)` |
 | `60-80%` | `[0.60, 0.80)` |
 | `80-100%` | `[0.80, 1.00)` |
-| `100-125%` | `[1.00, 1.25)` |
-| `125-200%` | `[1.25, 2.00)` |
-| `200-300%` | `[2.00, 3.00)` |
-| `300%+` | `[3.00, inf)` |
+| `100%+` | `[1.00, inf)` |
 
 Stored in `src/poker_analytics/data/bet_sizing.py`. Always normalize bet sizes by pot size before bucketizing.
 

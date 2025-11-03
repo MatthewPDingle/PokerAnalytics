@@ -4,6 +4,8 @@
   "description": "Frontend for the Poker Analytics dashboard",
   "private": true,
   "scripts": {
+    "predev": "python ../scripts/refresh_flop_caches.py",
+    "prebuild": "python ../scripts/refresh_flop_caches.py --skip-build",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
