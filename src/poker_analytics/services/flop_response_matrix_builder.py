@@ -192,10 +192,13 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
     player_contrib: Dict[str, float] = defaultdict(float)
     total_pot = 0.0
     preflop_raise_count = 0
+    preflop_aggressor: Optional[str] = None
+    preflop_aggressor: Optional[str] = None
     active_players = {player.name for player in players}
     preflop_aggressor: Optional[str] = None
     events: list[dict[str, object]] = []
     preflop_buckets: Dict[str, Optional[str]] = {}
+    preflop_aggressor: Optional[str] = None
 
     rounds = sorted(root.findall(".//round"), key=lambda r: int(r.attrib.get("no", "0")))
     flop_player_count: Optional[int] = None
@@ -224,6 +227,9 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
                     bucket = bucket_for_ratio(ratio)
                     preflop_buckets[player] = bucket.key if bucket is not None and ratio is not None else None
                     preflop_raise_count += 1
+                    preflop_aggressor = player
+                    preflop_aggressor = player
+                    preflop_aggressor = player
                 if amount > 0:
                     total_pot += amount
 
@@ -490,14 +496,21 @@ def _classify_bet(
     return "stab"
 
 
-def _update_flop_line(flop_lines: Dict[str, str], player: str, candidate: str) -> None:
+def _update_flop_line(
+    flop_lines: Dict[str, Dict[str, object]],
+    player: str,
+    candidate: str,
+    is_preflop_aggressor: bool,
+) -> None:
     priority = FLOP_LINE_PRIORITY.get(candidate)
     if priority is None:
         return
     current = flop_lines.get(player)
-    current_priority = FLOP_LINE_PRIORITY.get(current, -1)
-    if priority > current_priority:
-        flop_lines[player] = candidate
+    current_priority = FLOP_LINE_PRIORITY.get(current["line"] if current else None, -1)
+    if current is None or priority > current_priority:
+        flop_lines[player] = {"line": candidate, "is_preflop_aggressor": bool(is_preflop_aggressor)}
+    elif priority == current_priority:
+        current["is_preflop_aggressor"] = bool(current.get("is_preflop_aggressor")) or bool(is_preflop_aggressor)
 
 
 def _bettor_in_position(bettor: str, position_index: Dict[str, int], active_players: Iterable[str]) -> bool:
@@ -511,12 +524,18 @@ def _bettor_in_position(bettor: str, position_index: Dict[str, int], active_play
 
 
 def _determine_turn_bet_line(
-    flop_line: Optional[str],
+    flop_line_info: Optional[Mapping[str, object]],
     position: str,
     flop_bet_seen: bool,
 ) -> Optional[str]:
-    if not flop_line:
+    if not flop_line_info:
         return None
+    flop_line = flop_line_info.get("line") if isinstance(flop_line_info, Mapping) else None
+    if not isinstance(flop_line, str) or not flop_line:
+        return None
+    is_preflop_aggressor = bool(
+        flop_line_info.get("is_preflop_aggressor") if isinstance(flop_line_info, Mapping) else False
+    )
     if flop_line == "B":
         return "double_barrel"
     if flop_line == "XR":
@@ -528,9 +547,11 @@ def _determine_turn_bet_line(
     if flop_line == "C":
         return "ip_float_stab"
     if flop_line == "X":
+        if is_preflop_aggressor:
+            return "delayed_cbet"
         if not flop_bet_seen:
             return "probe" if position == "OOP" else "delayed_cbet"
-        return "delayed_cbet"
+        return "delayed_cbet" if position == "IP" else "probe"
     return None
 
 
@@ -1046,7 +1067,8 @@ def _turn_events_from_hand_history(
     player_states: Dict[str, dict[str, object]] = {name: {"checked": False} for name in active_players}
     player_stacks: Dict[str, float] = {player.name: player.balance for player in players}
     preflop_buckets: Dict[str, Optional[str]] = {}
-    flop_lines: Dict[str, str] = {}
+    preflop_aggressor: Optional[str] = None
+    flop_lines: Dict[str, Dict[str, object]] = {}
 
     total_pot = 0.0
     preflop_raise_count = 0
@@ -1079,6 +1101,7 @@ def _turn_events_from_hand_history(
                     bucket = bucket_for_ratio(ratio)
                     preflop_buckets[player] = bucket.key if bucket is not None and ratio is not None else None
                     preflop_raise_count += 1
+                    preflop_aggressor = player
 
                 _deduct_stack(player_stacks, player, amount)
 
@@ -1106,22 +1129,22 @@ def _turn_events_from_hand_history(
 
                 if action_type in CHECK_TYPES:
                     state["checked"] = True
-                    _update_flop_line(flop_lines, player, "X")
+                    _update_flop_line(flop_lines, player, "X", player == preflop_aggressor)
                 elif action_type in BET_TYPES:
                     flop_bet_seen = True
-                    _update_flop_line(flop_lines, player, "B")
+                    _update_flop_line(flop_lines, player, "B", player == preflop_aggressor)
                 elif action_type in RAISE_TYPES:
                     flop_bet_seen = True
                     if state.get("checked"):
-                        _update_flop_line(flop_lines, player, "XR")
+                        _update_flop_line(flop_lines, player, "XR", player == preflop_aggressor)
                     else:
-                        _update_flop_line(flop_lines, player, "R")
+                        _update_flop_line(flop_lines, player, "R", player == preflop_aggressor)
                 elif action_type in CALL_TYPES:
                     flop_bet_seen = True
                     if state.get("checked"):
-                        _update_flop_line(flop_lines, player, "XC")
+                        _update_flop_line(flop_lines, player, "XC", player == preflop_aggressor)
                     else:
-                        _update_flop_line(flop_lines, player, "C")
+                        _update_flop_line(flop_lines, player, "C", player == preflop_aggressor)
 
                 if amount > 0:
                     total_pot += amount
