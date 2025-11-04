@@ -11,6 +11,12 @@ from poker_analytics.services.flop_response_matrix import (
     load_flop_pot_contribution,
     load_flop_response_matrix,
 )
+from poker_analytics.services.turn_hand_matrix import load_turn_hand_matrix
+from poker_analytics.services.turn_responder_hand_matrix import load_turn_responder_hand_matrix
+from poker_analytics.services.turn_response_matrix import (
+    load_turn_pot_contribution,
+    load_turn_response_matrix,
+)
 from poker_analytics.services.line_explorer import load_line_explorer
 from poker_analytics.services.line_query import query_line
 from poker_analytics.services.line_responder_hand_matrix import load_line_responder_hand_matrix
@@ -59,6 +65,26 @@ async def flop_hand_types() -> dict:
 @router.get("/flop/responder-hand-matrix", summary="Responder flop hand categories by bet size")
 async def flop_responder_hand_types() -> dict:
     return load_flop_responder_hand_matrix()
+
+
+@router.get("/turn/response-matrix", summary="Turn bet response matrix")
+async def turn_response_matrix() -> dict:
+    return load_turn_response_matrix()
+
+
+@router.get("/turn/pot-contribution", summary="Average turn pot contribution by bet size")
+async def turn_pot_contribution() -> dict:
+    return load_turn_pot_contribution()
+
+
+@router.get("/turn/hand-types", summary="Hero turn hand categories by bet size")
+async def turn_hand_types() -> dict:
+    return load_turn_hand_matrix()
+
+
+@router.get("/turn/responder-hand-matrix", summary="Responder turn hand categories by bet size")
+async def turn_responder_hand_types() -> dict:
+    return load_turn_responder_hand_matrix()
 
 
 @router.get("/lines/explorer", summary="Multi-street line explorer aggregates")

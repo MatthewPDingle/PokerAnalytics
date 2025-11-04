@@ -8,6 +8,11 @@ const PAGES = [
     to: '/flop/response-matrix',
   },
   {
+    title: 'Turn Response Matrix',
+    description: 'Villain fold/call/raise rates by turn bet size with line and position filters.',
+    to: '/turn/response-matrix',
+  },
+  {
     title: 'Line Explorer',
     description: 'Analyze multi-street betting lines such as flop check-call into turn bets with responder breakdowns.',
     to: '/lines/explorer',

@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from poker_analytics.config import build_data_paths
-from poker_analytics.services.flop_response_matrix_builder import write_flop_response_cache
+from poker_analytics.services.flop_response_matrix_builder import (
+    write_flop_response_cache,
+    write_turn_response_cache,
+)
 
 CACHE_PATTERNS: tuple[str, ...] = (
     "flop_response_matrix*.json",
@@ -16,6 +19,13 @@ CACHE_PATTERNS: tuple[str, ...] = (
     "line_explorer*.json",
     "line_responder_hand_matrix*.json",
     "line_query*.json",
+)
+
+TURN_CACHE_PATTERNS: tuple[str, ...] = (
+    "turn_response_matrix*.json",
+    "turn_hand_matrix*.json",
+    "turn_responder_hand_matrix*.json",
+    "turn_pot_contribution*.json",
 )
 
 
@@ -48,4 +58,21 @@ def refresh_flop_caches(*, max_hands: Optional[int] = None, rebuild: bool = True
     return write_flop_response_cache(max_hands=max_hands)
 
 
-__all__ = ["CACHE_PATTERNS", "clear_flop_cache_files", "refresh_flop_caches"]
+def refresh_turn_caches(*, max_hands: Optional[int] = None, rebuild: bool = True) -> Optional[Path]:
+    """Clear cached turn payloads and optionally rebuild the response matrix."""
+
+    clear_flop_cache_files(patterns=TURN_CACHE_PATTERNS)
+
+    if not rebuild:
+        return None
+
+    return write_turn_response_cache(max_hands=max_hands)
+
+
+__all__ = [
+    "CACHE_PATTERNS",
+    "TURN_CACHE_PATTERNS",
+    "clear_flop_cache_files",
+    "refresh_flop_caches",
+    "refresh_turn_caches",
+]

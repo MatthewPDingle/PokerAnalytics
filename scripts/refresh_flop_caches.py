@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Utility to clear cached flop analytics payloads and rebuild the response matrix."""
+"""Utility to clear cached flop/turn analytics payloads and rebuild response matrices."""
 
 from __future__ import annotations
 
@@ -15,7 +15,12 @@ for candidate in (str(SRC_ROOT), str(REPO_ROOT)):
         sys.path.insert(0, candidate)
 
 from poker_analytics.config import build_data_paths
-from poker_analytics.services.cache_refresh import CACHE_PATTERNS, refresh_flop_caches
+from poker_analytics.services.cache_refresh import (
+    CACHE_PATTERNS,
+    TURN_CACHE_PATTERNS,
+    refresh_flop_caches,
+    refresh_turn_caches,
+)
 
 
 def _remove_matching(cache_dir: Path, patterns: Iterable[str]) -> list[Path]:
@@ -41,7 +46,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-build",
         action="store_true",
-        help="Delete caches without rebuilding the flop response matrix.",
+        help="Delete caches without rebuilding the response matrices.",
     )
     return parser.parse_args(argv or sys.argv[1:])
 
@@ -54,17 +59,20 @@ def main(argv: list[str] | None = None) -> int:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     if args.skip_build:
-        removed = _remove_matching(cache_dir, CACHE_PATTERNS)
+        combined_patterns = tuple(dict.fromkeys((*CACHE_PATTERNS, *TURN_CACHE_PATTERNS)))
+        removed = _remove_matching(cache_dir, combined_patterns)
         if removed:
             print("Removed cache files:")
             for path in sorted(removed):
                 print(f"  - {path}")
         else:
             print("No cache files matched; nothing was removed.")
-        print("Skipped rebuilding flop response matrix (--skip-build).")
+        print("Skipped rebuilding response matrices (--skip-build).")
     else:
-        destination = refresh_flop_caches(max_hands=args.max_hands, rebuild=True)
-        print(f"Flop caches cleared and response matrix rebuilt: {destination}")
+        flop_destination = refresh_flop_caches(max_hands=args.max_hands, rebuild=True)
+        turn_destination = refresh_turn_caches(max_hands=args.max_hands, rebuild=True)
+        print(f"Flop caches cleared and response matrix rebuilt: {flop_destination}")
+        print(f"Turn caches cleared and response matrix rebuilt: {turn_destination}")
 
     return 0
 
