@@ -13,6 +13,11 @@ const PAGES = [
     to: '/turn/response-matrix',
   },
   {
+    title: 'River Response Matrix',
+    description: 'Villain fold/call/raise rates by river bet size with advanced line, texture, and position filters.',
+    to: '/river/response-matrix',
+  },
+  {
     title: 'Line Explorer',
     description: 'Analyze multi-street betting lines such as flop check-call into turn bets with responder breakdowns.',
     to: '/lines/explorer',

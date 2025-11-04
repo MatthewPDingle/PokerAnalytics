@@ -17,6 +17,12 @@ from poker_analytics.services.turn_response_matrix import (
     load_turn_pot_contribution,
     load_turn_response_matrix,
 )
+from poker_analytics.services.river_hand_matrix import load_river_hand_matrix
+from poker_analytics.services.river_responder_hand_matrix import load_river_responder_hand_matrix
+from poker_analytics.services.river_response_matrix import (
+    load_river_pot_contribution,
+    load_river_response_matrix,
+)
 from poker_analytics.services.line_explorer import load_line_explorer
 from poker_analytics.services.line_query import query_line
 from poker_analytics.services.line_responder_hand_matrix import load_line_responder_hand_matrix
@@ -85,6 +91,26 @@ async def turn_hand_types() -> dict:
 @router.get("/turn/responder-hand-matrix", summary="Responder turn hand categories by bet size")
 async def turn_responder_hand_types() -> dict:
     return load_turn_responder_hand_matrix()
+
+
+@router.get("/river/response-matrix", summary="River bet response matrix")
+async def river_response_matrix() -> dict:
+    return load_river_response_matrix()
+
+
+@router.get("/river/pot-contribution", summary="Average river pot contribution by bet size")
+async def river_pot_contribution() -> dict:
+    return load_river_pot_contribution()
+
+
+@router.get("/river/hand-types", summary="Hero river hand categories by bet size")
+async def river_hand_types() -> dict:
+    return load_river_hand_matrix()
+
+
+@router.get("/river/responder-hand-matrix", summary="Responder river hand categories by bet size")
+async def river_responder_hand_types() -> dict:
+    return load_river_responder_hand_matrix()
 
 
 @router.get("/lines/explorer", summary="Multi-street line explorer aggregates")

@@ -16,7 +16,7 @@ from poker_analytics.data.cards import extract_big_blind
 from poker_analytics.data.drivehud import DriveHudDataSource
 from poker_analytics.data.stakes import StakePolicy
 from poker_analytics.data.flop_hand_categories import classify_flop_hand, parse_board_cards, parse_hole_cards
-from poker_analytics.data.textures import texture_keys, turn_texture_keys
+from poker_analytics.data.textures import texture_keys, turn_texture_keys, river_texture_keys
 from poker_analytics.services.flop_bucket_utils import bucket_keys_for_event
 
 BET_TYPES = {"5", "7"}
@@ -51,6 +51,15 @@ FLOP_LINE_PRIORITY = {
     "X": 0,
 }
 
+TURN_LINE_PRIORITY = {
+    "XR": 4,
+    "R": 4,
+    "B": 3,
+    "XC": 2,
+    "C": 2,
+    "X": 1,
+}
+
 TURN_LINE_KEYS: Sequence[str] = (
     "double_barrel",
     "delayed_cbet",
@@ -59,6 +68,15 @@ TURN_LINE_KEYS: Sequence[str] = (
     "raise_barrel",
     "ip_float_stab",
     "oop_xc_donk_lead",
+)
+
+RIVER_LINE_KEYS: Sequence[str] = (
+    "triple_barrel",
+    "bet_check_bet",
+    "delayed_double",
+    "river_stab",
+    "float_river_stab",
+    "raise_barrel",
 )
 
 
@@ -513,6 +531,20 @@ def _update_flop_line(
         current["is_preflop_aggressor"] = bool(current.get("is_preflop_aggressor")) or bool(is_preflop_aggressor)
 
 
+def _update_turn_line(
+    turn_lines: Dict[str, Dict[str, object]],
+    player: str,
+    candidate: str,
+) -> None:
+    priority = TURN_LINE_PRIORITY.get(candidate)
+    if priority is None:
+        return
+    current = turn_lines.get(player)
+    current_priority = TURN_LINE_PRIORITY.get(current["line"] if current else None, -1)
+    if current is None or priority > current_priority:
+        turn_lines[player] = {"line": candidate}
+
+
 def _bettor_in_position(bettor: str, position_index: Dict[str, int], active_players: Iterable[str]) -> bool:
     indices = [position_index[player] for player in active_players if player in position_index]
     if not indices:
@@ -552,6 +584,46 @@ def _determine_turn_bet_line(
         if not flop_bet_seen:
             return "probe" if position == "OOP" else "delayed_cbet"
         return "delayed_cbet" if position == "IP" else "probe"
+    return None
+
+
+def _normalise_street_line_code(value: object) -> Optional[str]:
+    if isinstance(value, Mapping):
+        raw = value.get("line")
+    else:
+        raw = value
+    if not isinstance(raw, str):
+        return None
+    mapping = {
+        "XR": "R",
+        "R": "R",
+        "B": "B",
+        "XC": "C",
+        "C": "C",
+        "X": "X",
+    }
+    return mapping.get(raw.upper())
+
+
+def _determine_river_bet_line(
+    flop_line_info: Optional[Mapping[str, object]],
+    turn_line_info: Optional[Mapping[str, object]],
+) -> Optional[str]:
+    flop_code = _normalise_street_line_code(flop_line_info)
+    turn_code = _normalise_street_line_code(turn_line_info)
+
+    if flop_code == "B" and turn_code == "B":
+        return "triple_barrel"
+    if flop_code == "B" and turn_code == "X":
+        return "bet_check_bet"
+    if flop_code == "X" and turn_code == "B":
+        return "delayed_double"
+    if flop_code == "X" and turn_code == "X":
+        return "river_stab"
+    if flop_code == "C" and turn_code == "X":
+        return "float_river_stab"
+    if flop_code == "R" and turn_code in {"B", "R"}:
+        return "raise_barrel"
     return None
 
 
@@ -615,6 +687,30 @@ def _extract_turn_cards(root: ET.Element) -> List[tuple[str, int, str]]:
 
     if flop_cards and len(flop_cards) == 3 and single_turn is not None:
         return [*flop_cards, single_turn]
+
+    return []
+
+
+def _extract_river_cards(root: ET.Element) -> List[tuple[str, int, str]]:
+    turn_cards = _extract_turn_cards(root)
+    single_river: Optional[tuple[str, int, str]] = None
+
+    for node in root.findall('.//round[@no="4"]/cards'):
+        node_type = (node.attrib.get("type") or "").lower()
+        source = node.attrib.get("cards") or node.text
+        if not source:
+            continue
+        cards = parse_board_cards(source)
+        if len(cards) >= 5:
+            return cards[:5]
+        if node_type == "river" and cards:
+            if len(cards) == 1:
+                single_river = cards[0]
+            elif len(cards) == 5:
+                return cards[:5]
+
+    if turn_cards and len(turn_cards) == 4 and single_river is not None:
+        return [*turn_cards, single_river]
 
     return []
 
@@ -1073,8 +1169,8 @@ def _turn_events_from_hand_history(
     total_pot = 0.0
     preflop_raise_count = 0
     players_dealt = len(players)
-    flop_bet_seen = False
     turn_player_count: Optional[int] = None
+    flop_bet_seen = False
 
     current_event: Optional[dict[str, object]] = None
     current_event_index: Optional[int] = None
@@ -1290,6 +1386,313 @@ def _turn_events_from_hand_history(
     return events
 
 
+def _river_events_from_hand_history(
+    hand_history: str,
+    stake_policy: StakePolicy,
+) -> list[dict[str, object]]:
+    root = ET.fromstring(hand_history)
+
+    events: list[dict[str, object]] = []
+
+    hero = _hero_name(root)
+    if not hero:
+        return events
+
+    players = _parse_players(root)
+    if not players or hero not in {player.name for player in players}:
+        return events
+
+    position_index = _position_index(players)
+    position_labels = _position_labels(players)
+    if hero not in position_index or hero not in position_labels:
+        return events
+
+    big_blind = extract_big_blind(root)
+    if not big_blind or big_blind <= 0:
+        return events
+    if not stake_policy.matches(big_blind):
+        return events
+
+    player_hole_cards = _extract_all_hole_cards(root)
+    hero_hole_cards = player_hole_cards.get(hero, [])
+    hero_hole_cards_text = " ".join(card for _, _, card in hero_hole_cards) if hero_hole_cards else None
+
+    flop_cards = _extract_flop_cards(root)
+    flop_cards_text = " ".join(card for _, _, card in flop_cards) if flop_cards else None
+    flop_texture_list = texture_keys(flop_cards_text) if flop_cards_text else []
+
+    turn_cards = _extract_turn_cards(root)
+    if len(turn_cards) != 4:
+        return events
+    turn_cards_text = " ".join(card for _, _, card in turn_cards)
+    turn_texture_list = turn_texture_keys(turn_cards_text)
+
+    river_cards = _extract_river_cards(root)
+    if len(river_cards) != 5:
+        return events
+    river_cards_text = " ".join(card for _, _, card in river_cards)
+    river_texture_list = river_texture_keys(river_cards_text)
+
+    player_river_classifications: Dict[str, Optional[object]] = {}
+    for name, cards in player_hole_cards.items():
+        if len(cards) == 2:
+            try:
+                player_river_classifications[name] = classify_flop_hand(cards, river_cards)
+            except Exception:
+                player_river_classifications[name] = None
+
+    active_players = {player.name for player in players}
+    flop_states: Dict[str, dict[str, object]] = {name: {"checked": False} for name in active_players}
+    turn_states: Dict[str, dict[str, object]] = {name: {"checked": False} for name in active_players}
+    player_stacks: Dict[str, float] = {player.name: player.balance for player in players}
+    preflop_buckets: Dict[str, Optional[str]] = {}
+    preflop_aggressor: Optional[str] = None
+    flop_lines: Dict[str, Dict[str, object]] = {}
+    turn_lines: Dict[str, Dict[str, object]] = {}
+
+    total_pot = 0.0
+    preflop_raise_count = 0
+    players_dealt = len(players)
+    flop_bet_seen = False
+    river_player_count: Optional[int] = None
+
+    current_event: Optional[dict[str, object]] = None
+    current_event_index: Optional[int] = None
+    current_event_round: Optional[int] = None
+
+    rounds = sorted(root.findall(".//round"), key=lambda r: int(r.attrib.get("no", "0")))
+
+    for round_elem in rounds:
+        round_no = int(round_elem.attrib.get("no", "0"))
+        actions = list(round_elem.findall("action"))
+
+        if round_no == 1:
+            for action_elem in actions:
+                player = action_elem.attrib.get("player")
+                action_type = action_elem.attrib.get("type")
+                if not player or not action_type:
+                    continue
+
+                amount = _safe_amount(action_elem)
+                pot_before = total_pot
+
+                if action_type in BET_TYPES | RAISE_TYPES | ALL_IN_TYPES and amount > 0:
+                    ratio = (amount / pot_before) if pot_before > 0 else None
+                    bucket = bucket_for_ratio(ratio)
+                    preflop_buckets[player] = bucket.key if bucket is not None and ratio is not None else None
+                    preflop_raise_count += 1
+                    preflop_aggressor = player
+
+                _deduct_stack(player_stacks, player, amount)
+
+                if amount > 0:
+                    total_pot += amount
+
+                if action_type in FOLD_TYPES:
+                    active_players.discard(player)
+                elif action_type not in CHECK_TYPES:
+                    active_players.add(player)
+
+        elif round_no == 2:
+            if len(active_players) < 2:
+                break
+
+            for action_elem in actions:
+                player = action_elem.attrib.get("player")
+                action_type = action_elem.attrib.get("type")
+                if not player or not action_type:
+                    continue
+
+                state = flop_states.setdefault(player, {"checked": False})
+                amount = _safe_amount(action_elem)
+                _deduct_stack(player_stacks, player, amount)
+
+                if action_type in CHECK_TYPES:
+                    state["checked"] = True
+                    _update_flop_line(flop_lines, player, "X", player == preflop_aggressor)
+                elif action_type in BET_TYPES:
+                    flop_bet_seen = True
+                    _update_flop_line(flop_lines, player, "B", player == preflop_aggressor)
+                elif action_type in RAISE_TYPES:
+                    flop_bet_seen = True
+                    if state.get("checked"):
+                        _update_flop_line(flop_lines, player, "XR", player == preflop_aggressor)
+                    else:
+                        _update_flop_line(flop_lines, player, "R", player == preflop_aggressor)
+                elif action_type in CALL_TYPES:
+                    candidate = "XC" if state.get("checked") else "C"
+                    _update_flop_line(flop_lines, player, candidate, player == preflop_aggressor)
+
+                if amount > 0:
+                    total_pot += amount
+                if action_type in FOLD_TYPES:
+                    active_players.discard(player)
+
+        elif round_no == 3:
+            if len(active_players) < 2:
+                break
+
+            for action_elem in actions:
+                player = action_elem.attrib.get("player")
+                action_type = action_elem.attrib.get("type")
+                if not player or not action_type:
+                    continue
+
+                state = turn_states.setdefault(player, {"checked": False})
+                amount = _safe_amount(action_elem)
+                _deduct_stack(player_stacks, player, amount)
+
+                if action_type in CHECK_TYPES:
+                    state["checked"] = True
+                    _update_turn_line(turn_lines, player, "X")
+                elif action_type in BET_TYPES:
+                    _update_turn_line(turn_lines, player, "B")
+                elif action_type in RAISE_TYPES:
+                    candidate = "XR" if state.get("checked") else "R"
+                    _update_turn_line(turn_lines, player, candidate)
+                elif action_type in CALL_TYPES:
+                    candidate = "XC" if state.get("checked") else "C"
+                    _update_turn_line(turn_lines, player, candidate)
+
+                if amount > 0:
+                    total_pot += amount
+
+                if action_type in FOLD_TYPES:
+                    active_players.discard(player)
+
+        elif round_no == 4:
+            if len(active_players) < 2:
+                break
+
+            for idx, action_elem in enumerate(actions):
+                player = action_elem.attrib.get("player")
+                action_type = action_elem.attrib.get("type")
+                if not player or not action_type:
+                    continue
+
+                snapshot_before = set(active_players)
+                amount = _safe_amount(action_elem)
+                _deduct_stack(player_stacks, player, amount)
+                pot_before = total_pot
+
+                if snapshot_before and river_player_count is None:
+                    river_player_count = len(snapshot_before)
+
+                if action_type in BET_TYPES:
+                    if pot_before <= 0:
+                        continue
+
+                    position = "IP" if _bettor_in_position(player, position_index, snapshot_before) else "OOP"
+                    line_key = _determine_river_bet_line(flop_lines.get(player), turn_lines.get(player))
+                    if line_key not in RIVER_LINE_KEYS:
+                        continue
+
+                    ratio = amount / pot_before if pot_before > 0 else 0.0
+                    bucket = bucket_for_ratio(ratio)
+                    tolerance = max(1e-6, big_blind * 1e-4) if big_blind else 1e-6
+                    player_stack_after = max(player_stacks.get(player, 0.0), 0.0)
+                    is_one_bb = math.isfinite(big_blind) and abs(amount - big_blind) <= tolerance
+                    is_all_in = action_type in ALL_IN_TYPES or player_stack_after <= tolerance
+
+                    bucket_key = bucket.key if bucket is not None else None
+                    bucket_payload = {
+                        "bucket_key": bucket_key,
+                        "ratio": ratio,
+                        "is_check": False,
+                        "is_all_in": is_all_in,
+                        "is_one_bb": is_one_bb,
+                    }
+                    bucket_keys = bucket_keys_for_event(bucket_payload)
+                    if not bucket_keys:
+                        continue
+
+                    outcome = _villain_outcome(actions[idx + 1 :], player)
+                    responses = _collect_river_responses(actions[idx + 1 :], player, player_hole_cards, river_cards)
+                    classification = player_river_classifications.get(player)
+                    bettor_cards = player_hole_cards.get(player, [])
+                    hole_cards_text = " ".join(card for _, _, card in bettor_cards) if bettor_cards else None
+
+                    total_added_river = amount
+                    total_added_river_bb = amount / big_blind if big_blind else 0.0
+
+                    event_record = {
+                        "hero_position": position_labels.get(player, "UNKNOWN"),
+                        "bettor": player,
+                        "bet_line": line_key,
+                        "position": position,
+                        "player_count": river_player_count or len(snapshot_before),
+                        "ratio": ratio,
+                        "bucket_key": bucket_key,
+                        "is_check": False,
+                        "is_all_in": is_all_in,
+                        "is_one_bb": is_one_bb,
+                        "villain_outcome": outcome,
+                        "bettor_is_hero": False,
+                        "hand_primary": classification.primary if classification else None,
+                        "has_flush_draw": bool(classification and getattr(classification, "has_flush_draw", False)),
+                        "has_oesd_dg": bool(classification and getattr(classification, "has_oesd_dg", False)),
+                        "hole_cards": hole_cards_text,
+                        "hero_hole_cards": hero_hole_cards_text,
+                        "flop_cards": flop_cards_text,
+                        "flop_texture_keys": flop_texture_list,
+                        "turn_cards": turn_cards_text,
+                        "turn_texture_keys": turn_texture_list,
+                        "river_cards": river_cards_text,
+                        "river_texture_keys": river_texture_list,
+                        "pot_before_bb": (pot_before / big_blind) if big_blind else 0.0,
+                        "total_added_river": total_added_river,
+                        "total_added_river_bb": total_added_river_bb,
+                        "total_added_all": total_added_river,
+                        "total_added_all_bb": total_added_river_bb,
+                        "responses": responses,
+                        "preflop_aggression_level": preflop_raise_count,
+                        "preflop_bucket_key": preflop_buckets.get(player),
+                        "players_dealt": players_dealt,
+                    }
+                    events.append(event_record)
+                    current_event = event_record
+                    current_event_index = idx
+                    current_event_round = round_no
+
+                if amount > 0:
+                    total_pot += amount
+                    if (
+                        current_event is not None
+                        and current_event_round == round_no
+                        and current_event_index is not None
+                        and idx > current_event_index
+                    ):
+                        increment = amount
+                        increment_bb = amount / big_blind if big_blind else 0.0
+                        current_event["total_added_river"] = float(current_event.get("total_added_river", 0.0)) + increment
+                        current_event["total_added_river_bb"] = float(current_event.get("total_added_river_bb", 0.0)) + increment_bb
+                        current_event["total_added_all"] = float(current_event.get("total_added_all", 0.0)) + increment
+                        current_event["total_added_all_bb"] = float(current_event.get("total_added_all_bb", 0.0)) + increment_bb
+
+                if action_type in FOLD_TYPES:
+                    active_players.discard(player)
+
+        else:
+            for action_elem in actions:
+                player = action_elem.attrib.get("player")
+                action_type = action_elem.attrib.get("type")
+                if not player or not action_type:
+                    continue
+
+                amount = _safe_amount(action_elem)
+                _deduct_stack(player_stacks, player, amount)
+
+                if amount > 0:
+                    total_pot += amount
+                    if current_event is not None:
+                        increment = amount
+                        increment_bb = amount / big_blind if big_blind else 0.0
+                        current_event["total_added_all"] = float(current_event.get("total_added_all", 0.0)) + increment
+                        current_event["total_added_all_bb"] = float(current_event.get("total_added_all_bb", 0.0)) + increment_bb
+
+    return events
+
+
 def collect_turn_bet_events(
     source: Optional[DriveHudDataSource] = None,
     *,
@@ -1333,6 +1736,54 @@ def write_turn_response_cache(
     data_paths.ensure_cache_dir()
     stake_policy = StakePolicy.from_environment()
     destination = output_path or (data_paths.cache_dir / f"turn_response_matrix_{stake_policy.cache_token()}.json")
+    with destination.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+    return destination
+
+
+def collect_river_bet_events(
+    source: Optional[DriveHudDataSource] = None,
+    *,
+    max_hands: Optional[int] = None,
+) -> list[dict[str, object]]:
+    source = source or DriveHudDataSource.from_defaults()
+    if not source.is_available():
+        return []
+
+    events: list[dict[str, object]] = []
+    stake_policy = StakePolicy.from_environment()
+
+    for row in source.rows("SELECT HandHistory FROM HandHistories"):
+        hand_history = row.get("HandHistory")
+        if not hand_history:
+            continue
+        try:
+            events.extend(_river_events_from_hand_history(hand_history, stake_policy))
+        except ET.ParseError:
+            continue
+
+        if max_hands is not None and len(events) >= max_hands:
+            del events[max_hands:]
+            break
+
+    return events
+
+
+def write_river_response_cache(
+    output_path: Optional[Path] = None,
+    *,
+    max_hands: Optional[int] = None,
+    source: Optional[DriveHudDataSource] = None,
+) -> Path:
+    from poker_analytics.services import river_response_matrix as river_matrix
+
+    events = collect_river_bet_events(source=source, max_hands=max_hands)
+    payload = river_matrix.build_river_response_payload(events)
+
+    data_paths = build_data_paths()
+    data_paths.ensure_cache_dir()
+    stake_policy = StakePolicy.from_environment()
+    destination = output_path or (data_paths.cache_dir / f"river_response_matrix_{stake_policy.cache_token()}.json")
     with destination.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, separators=(",", ":"))
     return destination
@@ -1499,10 +1950,64 @@ def _collect_turn_responses(
     return responses
 
 
+def _collect_river_responses(
+    subsequent_actions: Sequence[ET.Element],
+    bettor: str,
+    player_hole_cards: Mapping[str, List[tuple[str, int, str]]],
+    river_cards: Sequence[tuple[str, int, str]],
+) -> list[dict[str, object]]:
+    responses: list[dict[str, object]] = []
+    seen_players: set[str] = set()
+
+    for action_elem in subsequent_actions:
+        player = action_elem.attrib.get("player")
+        action_type = action_elem.attrib.get("type")
+        if not player or not action_type:
+            continue
+        if player == bettor:
+            if action_type in CALL_TYPES | BET_TYPES | RAISE_TYPES:
+                break
+            continue
+        if action_type not in (CALL_TYPES | BET_TYPES | RAISE_TYPES):
+            continue
+        if player in seen_players:
+            continue
+
+        responder_cards = player_hole_cards.get(player, [])
+        if not (
+            responder_cards
+            and river_cards
+            and len(responder_cards) == 2
+            and len(river_cards) >= 5
+        ):
+            continue
+
+        classification = classify_flop_hand(responder_cards, river_cards)
+        hand_primary = classification.primary if classification else None
+        if not hand_primary:
+            continue
+
+        responses.append(
+            {
+                "player": player,
+                "response": "call" if action_type in CALL_TYPES else "raise",
+                "hand_primary": hand_primary,
+                "has_flush_draw": classification.has_flush_draw if classification else False,
+                "has_oesd_dg": classification.has_oesd_dg if classification else False,
+                "hole_cards": " ".join(card for _, _, card in responder_cards),
+            }
+        )
+        seen_players.add(player)
+
+    return responses
+
+
 __all__ = [
     "collect_flop_bet_events",
     "collect_turn_bet_events",
+    "collect_river_bet_events",
     "collect_line_events",
     "write_flop_response_cache",
     "write_turn_response_cache",
+    "write_river_response_cache",
 ]

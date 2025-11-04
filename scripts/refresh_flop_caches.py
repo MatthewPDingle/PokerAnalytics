@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Utility to clear cached flop/turn analytics payloads and rebuild response matrices."""
+"""Utility to clear cached flop/turn/river analytics payloads and rebuild response matrices."""
 
 from __future__ import annotations
 
@@ -18,8 +18,10 @@ from poker_analytics.config import build_data_paths
 from poker_analytics.services.cache_refresh import (
     CACHE_PATTERNS,
     TURN_CACHE_PATTERNS,
+    RIVER_CACHE_PATTERNS,
     refresh_flop_caches,
     refresh_turn_caches,
+    refresh_river_caches,
 )
 
 
@@ -59,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     if args.skip_build:
-        combined_patterns = tuple(dict.fromkeys((*CACHE_PATTERNS, *TURN_CACHE_PATTERNS)))
+        combined_patterns = tuple(dict.fromkeys((*CACHE_PATTERNS, *TURN_CACHE_PATTERNS, *RIVER_CACHE_PATTERNS)))
         removed = _remove_matching(cache_dir, combined_patterns)
         if removed:
             print("Removed cache files:")
@@ -71,8 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         flop_destination = refresh_flop_caches(max_hands=args.max_hands, rebuild=True)
         turn_destination = refresh_turn_caches(max_hands=args.max_hands, rebuild=True)
+        river_destination = refresh_river_caches(max_hands=args.max_hands, rebuild=True)
         print(f"Flop caches cleared and response matrix rebuilt: {flop_destination}")
         print(f"Turn caches cleared and response matrix rebuilt: {turn_destination}")
+        print(f"River caches cleared and response matrix rebuilt: {river_destination}")
 
     return 0
 

@@ -106,6 +106,12 @@ def parse_turn(text: Optional[str]) -> List[Card]:
     return _parse_cards(text)
 
 
+def parse_river(text: Optional[str]) -> List[Card]:
+    """Parse a DriveHUD-like river board string (flop + turn + river) into `Card` objects."""
+
+    return _parse_cards(text)
+
+
 def _has_pair(cards: Sequence[Card]) -> bool:
     ranks = [card.rank for card in cards]
     return len(ranks) != len(set(ranks))
@@ -156,6 +162,18 @@ def _connected_le_six(cards: Sequence[Card]) -> bool:
     wheel_values = sorted(_values_wheel_adjusted(cards))
     spread_wheel = wheel_values[-1] - wheel_values[0]
     return min(spread_standard, spread_wheel) <= 6
+
+
+def _connected_le_seven(cards: Sequence[Card]) -> bool:
+    if len(cards) != 5:
+        return False
+    values = sorted(_rank_values(cards))
+    if not values:
+        return False
+    spread_standard = values[-1] - values[0]
+    wheel_values = sorted(_values_wheel_adjusted(cards))
+    spread_wheel = wheel_values[-1] - wheel_values[0]
+    return min(spread_standard, spread_wheel) <= 7
 
 
 def _has_sequence(cards: Sequence[Card], length: int) -> bool:
@@ -220,6 +238,12 @@ def _high_board(cards: Sequence[Card]) -> bool:
     if not cards:
         return False
     return sum(1 for card in cards if card.rank_value >= 10) >= 3
+
+
+def _high_board_four(cards: Sequence[Card]) -> bool:
+    if not cards:
+        return False
+    return sum(1 for card in cards if card.rank_value >= 10) >= 4
 
 
 FLOP_TEXTURE_SPECS: Sequence[TextureSpec] = (
@@ -362,6 +386,82 @@ TURN_TEXTURE_SPECS: Sequence[TextureSpec] = (
 )
 
 
+RIVER_TEXTURE_SPECS: Sequence[TextureSpec] = (
+    TextureSpec(
+        key="two_tone",
+        title="Two-Tone Rivers",
+        description="Exactly two suits present.",
+        predicate=lambda cards: len(_suit_counts(cards)) == 2,
+    ),
+    TextureSpec(
+        key="three_tone",
+        title="Three-Tone Rivers",
+        description="Exactly three suits present.",
+        predicate=lambda cards: len(_suit_counts(cards)) == 3,
+    ),
+    TextureSpec(
+        key="four_tone",
+        title="Four-Tone Rivers",
+        description="Exactly four suits present.",
+        predicate=lambda cards: len(_suit_counts(cards)) == 4,
+    ),
+    TextureSpec(
+        key="connected_le7",
+        title="Connected Rivers (≤7 Gap)",
+        description="Rank spread between highest and lowest is seven or fewer (wheel-aware).",
+        predicate=_connected_le_seven,
+    ),
+    TextureSpec(
+        key="three_connected",
+        title="Three Connected Ranks",
+        description="At least three sequential ranks without gaps.",
+        predicate=lambda cards: _has_sequence(cards, 3),
+    ),
+    TextureSpec(
+        key="four_connected",
+        title="Four Connected Ranks",
+        description="At least four sequential ranks without gaps.",
+        predicate=lambda cards: _has_sequence(cards, 4),
+    ),
+    TextureSpec(
+        key="paired",
+        title="Paired River",
+        description="One rank appears exactly twice (no trips or double pairs).",
+        predicate=_paired_exactly_one,
+    ),
+    TextureSpec(
+        key="double_paired",
+        title="Double Paired River",
+        description="Two ranks each appear exactly twice.",
+        predicate=_paired_exactly_two,
+    ),
+    TextureSpec(
+        key="trips",
+        title="Trips on Board",
+        description="Some rank appears exactly three times.",
+        predicate=_trips_present,
+    ),
+    TextureSpec(
+        key="ace_high",
+        title="Ace-High Rivers",
+        description="An Ace is present and is the highest rank.",
+        predicate=_ace_high,
+    ),
+    TextureSpec(
+        key="low",
+        title="Low Rivers (All ≤ Ten)",
+        description="All ranks Ten or lower.",
+        predicate=_low_board,
+    ),
+    TextureSpec(
+        key="high",
+        title="High Rivers (≥4 Tens+)",
+        description="At least four cards Ten or higher.",
+        predicate=_high_board_four,
+    ),
+)
+
+
 def detect_textures(flop_text: Optional[str]) -> List[TextureSpec]:
     """Return the list of texture specs that match the provided flop string."""
 
@@ -380,6 +480,15 @@ def detect_turn_textures(turn_text: Optional[str]) -> List[TextureSpec]:
     return [spec for spec in TURN_TEXTURE_SPECS if spec.predicate(cards)]
 
 
+def detect_river_textures(river_text: Optional[str]) -> List[TextureSpec]:
+    """Return the list of texture specs that match the provided river string."""
+
+    cards = parse_river(river_text)
+    if len(cards) != 5:
+        return []
+    return [spec for spec in RIVER_TEXTURE_SPECS if spec.predicate(cards)]
+
+
 def texture_keys(flop_text: Optional[str]) -> List[str]:
     """Return the matching flop texture keys for convenience in serialization."""
 
@@ -390,6 +499,13 @@ def turn_texture_keys(turn_text: Optional[str]) -> List[str]:
     """Return the matching turn texture keys for convenience in serialization."""
 
     return [spec.key for spec in detect_turn_textures(turn_text)]
+
+
+def river_texture_keys(river_text: Optional[str]) -> List[str]:
+    """Return the matching river texture keys for convenience in serialization."""
+
+    return [spec.key for spec in detect_river_textures(river_text)]
+
 
 
 def texture_titles(specs: Iterable[TextureSpec] = FLOP_TEXTURE_SPECS) -> List[str]:
@@ -403,11 +519,15 @@ __all__ = [
     "TextureSpec",
     "FLOP_TEXTURE_SPECS",
     "TURN_TEXTURE_SPECS",
+    "RIVER_TEXTURE_SPECS",
     "detect_textures",
     "detect_turn_textures",
+    "detect_river_textures",
     "parse_flop",
     "parse_turn",
+    "parse_river",
     "texture_keys",
     "turn_texture_keys",
+    "river_texture_keys",
     "texture_titles",
 ]
