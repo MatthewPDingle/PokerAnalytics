@@ -51,6 +51,7 @@ type RawPayload = {
   scenarios: Array<{
     hero_position: string;
     bet_type: string;
+    bet_line: string;
     position: 'IP' | 'OOP';
     player_count: number;
     texture_key: string;

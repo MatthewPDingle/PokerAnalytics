@@ -57,6 +57,27 @@ type BucketEntry = {
   avgBreakevenPct: number;
 };
 
+const aggregateToEntry = (agg?: BucketAggregate): BucketEntry => {
+  const events = agg?.events ?? 0;
+  const foldPct = events ? (100 * (agg?.foldEvents ?? 0)) / events : 0;
+  const callPct = events ? (100 * (agg?.callEvents ?? 0)) / events : 0;
+  const raisePct = events ? (100 * (agg?.raiseEvents ?? 0)) / events : 0;
+  const continuePct = callPct + raisePct;
+
+  return {
+    events,
+    foldPct,
+    callPct,
+    raisePct,
+    continuePct,
+    avgRatio: events ? (agg?.ratioSum ?? 0) / events : 0,
+    avgAddedFlop: events ? (agg?.addedFlopSum ?? 0) / events : 0,
+    avgAddedAll: events ? (agg?.addedAllSum ?? 0) / events : 0,
+    avgShareAll: events ? (agg?.shareAllSum ?? 0) / events : 0,
+    avgBreakevenPct: events ? (agg?.breakevenSum ?? 0) / events : 0,
+  };
+};
+
 const formatPercent = (value: number) => `${value.toFixed(1)}%`;
 
 const formatNumber = (value: number) => value.toFixed(2);
@@ -113,7 +134,11 @@ const deriveRowGradient = (value: number, rowMax: number, palette: 'orange' | 'r
   return { bg: `rgb(${r}, ${g}, ${b})`, color: textColor };
 };
 
+const ANY_BUCKET_KEY = 'any_bucket';
+
 const ANY_OPTION: SelectOption = { key: '', label: 'Any' };
+
+const NON_UNIQUE_BUCKET_KEYS = new Set(['all_in', 'one_bb']);
 
 const HIDDEN_BUCKET_KEYS: string[] = ['check'];
 
@@ -198,27 +223,9 @@ const toBucketEntries = (bucketKeys: string[], aggregates: Map<string, BucketAgg
   let maxEvents = 0;
 
   bucketKeys.forEach((key) => {
-    const agg = aggregates.get(key);
-    const events = agg?.events ?? 0;
-    const foldPct = events ? (100 * (agg?.foldEvents ?? 0)) / events : 0;
-    const callPct = events ? (100 * (agg?.callEvents ?? 0)) / events : 0;
-    const raisePct = events ? (100 * (agg?.raiseEvents ?? 0)) / events : 0;
-    const continuePct = callPct + raisePct;
-
-    maxEvents = Math.max(maxEvents, events);
-
-    entries[key] = {
-      events,
-      foldPct,
-      callPct,
-      raisePct,
-      continuePct,
-      avgRatio: events ? (agg?.ratioSum ?? 0) / events : 0,
-      avgAddedFlop: events ? (agg?.addedFlopSum ?? 0) / events : 0,
-      avgAddedAll: events ? (agg?.addedAllSum ?? 0) / events : 0,
-      avgShareAll: events ? (agg?.shareAllSum ?? 0) / events : 0,
-      avgBreakevenPct: events ? (agg?.breakevenSum ?? 0) / events : 0,
-    };
+    const entry = aggregateToEntry(aggregates.get(key));
+    maxEvents = Math.max(maxEvents, entry.events);
+    entries[key] = entry;
   });
 
   return { entries, maxEvents };
@@ -247,6 +254,8 @@ const FlopResponseMatrix = () => {
   const [groupedHandTypes, setGroupedHandTypes] = useState(true);
   const [responderGroupedHandTypes, setResponderGroupedHandTypes] = useState(true);
   const [responderResponseType, setResponderResponseType] = useState<'call' | 'raise' | 'continue'>('call');
+  const [showBetTypeDefinitions, setShowBetTypeDefinitions] = useState(false);
+  const [showResponseDefinitions, setShowResponseDefinitions] = useState(false);
 
   const {
     data: handData,
@@ -270,6 +279,18 @@ const FlopResponseMatrix = () => {
   );
 
   const bucketKeys = useMemo(() => filteredBucketOrder.map((bucket) => bucket.key), [filteredBucketOrder]);
+
+  const displayBucketOrder = useMemo(
+    () => [{ key: ANY_BUCKET_KEY, label: 'Any' }, ...filteredBucketOrder],
+    [filteredBucketOrder],
+  );
+  const tableBucketKeys = useMemo(() => displayBucketOrder.map((bucket) => bucket.key), [displayBucketOrder]);
+
+  const anySourceBucketKeys = useMemo(() => {
+    const canonical = bucketKeys.filter((key) => !NON_UNIQUE_BUCKET_KEYS.has(key));
+    return canonical.length > 0 ? canonical : bucketKeys;
+  }, [bucketKeys]);
+  const anySourceBucketKeySet = useMemo(() => new Set(anySourceBucketKeys), [anySourceBucketKeys]);
 
   const betTypeOptions = useMemo(() => [ANY_OPTION, ...betTypes], [betTypes]);
   const heroPositionOptions = useMemo(
@@ -504,10 +525,54 @@ const FlopResponseMatrix = () => {
     [bucketKeys, aggregates],
   );
 
+  const anyBucketAggregate = useMemo(() => {
+    const totals: BucketAggregate = {
+      events: 0,
+      foldEvents: 0,
+      callEvents: 0,
+      raiseEvents: 0,
+      ratioSum: 0,
+      addedFlopSum: 0,
+      addedAllSum: 0,
+      shareAllSum: 0,
+      breakevenSum: 0,
+    };
+
+    anySourceBucketKeys.forEach((key) => {
+      const agg = aggregates.get(key);
+      if (!agg) {
+        return;
+      }
+      totals.events += agg.events;
+      totals.foldEvents += agg.foldEvents;
+      totals.callEvents += agg.callEvents;
+      totals.raiseEvents += agg.raiseEvents;
+      totals.ratioSum += agg.ratioSum;
+      totals.addedFlopSum += agg.addedFlopSum;
+      totals.addedAllSum += agg.addedAllSum;
+      totals.shareAllSum += agg.shareAllSum;
+      totals.breakevenSum += agg.breakevenSum;
+    });
+
+    return totals;
+  }, [aggregates, anySourceBucketKeys]);
+
+  const anyBucketEntry = useMemo(() => aggregateToEntry(anyBucketAggregate), [anyBucketAggregate]);
+
+  const entriesWithAny = useMemo(() => {
+    const merged: Record<string, BucketEntry> = { [ANY_BUCKET_KEY]: anyBucketEntry };
+    bucketKeys.forEach((key) => {
+      merged[key] = entries[key];
+    });
+    return merged;
+  }, [anyBucketEntry, bucketKeys, entries]);
+
+  const responseEventMax = maxEvents;
+
   const responseColumnMax = useMemo(() => {
     const columnMax: Record<string, number> = {};
-    bucketKeys.forEach((key) => {
-      const entry = entries[key];
+    tableBucketKeys.forEach((key) => {
+      const entry = entriesWithAny[key];
       if (!entry) {
         columnMax[key] = 0;
         return;
@@ -515,7 +580,7 @@ const FlopResponseMatrix = () => {
       columnMax[key] = Math.max(entry.foldPct, entry.callPct, entry.raisePct, entry.continuePct);
     });
     return columnMax;
-  }, [bucketKeys, entries]);
+  }, [entriesWithAny, tableBucketKeys]);
 
 
   const handAggregate = useMemo(() => {
@@ -557,10 +622,10 @@ const FlopResponseMatrix = () => {
 
   const handRowsData = useMemo(() => {
     const definitions = groupedHandTypes ? HAND_GROUP_DEFINITIONS : HAND_TYPE_DEFINITIONS;
-    const columnMax: Record<string, number> = {};
+    const columnMax: Record<string, number> = { [ANY_BUCKET_KEY]: 0 };
 
     const rows = definitions.map((definition) => {
-      const values = bucketKeys.map((key) => {
+      const bucketValues = bucketKeys.map((key) => {
         const bucket = handAggregate.buckets[key];
         const eventsCount = bucket?.events ?? 0;
         const categoryCount = definition.members.reduce((total, member) => {
@@ -571,11 +636,32 @@ const FlopResponseMatrix = () => {
         columnMax[key] = Math.max(columnMax[key] ?? 0, percent);
         return { bucketKey: key, events: eventsCount, count: categoryCount, percent };
       });
-      return { key: definition.key, label: definition.label, values };
+
+      const totals = bucketValues.reduce(
+        (acc, cell) => {
+          if (anySourceBucketKeySet.has(cell.bucketKey)) {
+            acc.events += cell.events;
+            acc.count += cell.count;
+          }
+          return acc;
+        },
+        { events: 0, count: 0 },
+      );
+      const totalPercent = totals.events > 0 ? (totals.count / totals.events) * 100 : 0;
+      columnMax[ANY_BUCKET_KEY] = Math.max(columnMax[ANY_BUCKET_KEY] ?? 0, totalPercent);
+
+      return {
+        key: definition.key,
+        label: definition.label,
+        values: [
+          { bucketKey: ANY_BUCKET_KEY, events: totals.events, count: totals.count, percent: totalPercent },
+          ...bucketValues,
+        ],
+      };
     });
 
     return { rows, columnMax };
-  }, [bucketKeys, groupedHandTypes, handAggregate]);
+  }, [anySourceBucketKeySet, bucketKeys, groupedHandTypes, handAggregate]);
 
   const responderHandAggregate = useMemo(() => {
     const template = HAND_MEMBER_KEYS.reduce<Record<string, number>>((acc, key) => {
@@ -616,10 +702,10 @@ const FlopResponseMatrix = () => {
 
   const responderHandRowsData = useMemo(() => {
     const definitions = responderGroupedHandTypes ? HAND_GROUP_DEFINITIONS : HAND_TYPE_DEFINITIONS;
-    const columnMax: Record<string, number> = {};
+    const columnMax: Record<string, number> = { [ANY_BUCKET_KEY]: 0 };
 
     const rows = definitions.map((definition) => {
-      const values = bucketKeys.map((key) => {
+      const bucketValues = bucketKeys.map((key) => {
         const bucket = responderHandAggregate.buckets[key];
         const eventsCount = bucket?.events ?? 0;
         const categoryCount = definition.members.reduce((total, member) => {
@@ -630,11 +716,62 @@ const FlopResponseMatrix = () => {
         columnMax[key] = Math.max(columnMax[key] ?? 0, percent);
         return { bucketKey: key, events: eventsCount, count: categoryCount, percent };
       });
-      return { key: definition.key, label: definition.label, values };
+
+      const totals = bucketValues.reduce(
+        (acc, cell) => {
+          if (anySourceBucketKeySet.has(cell.bucketKey)) {
+            acc.events += cell.events;
+            acc.count += cell.count;
+          }
+          return acc;
+        },
+        { events: 0, count: 0 },
+      );
+      const totalPercent = totals.events > 0 ? (totals.count / totals.events) * 100 : 0;
+      columnMax[ANY_BUCKET_KEY] = Math.max(columnMax[ANY_BUCKET_KEY] ?? 0, totalPercent);
+
+      return {
+        key: definition.key,
+        label: definition.label,
+        values: [
+          { bucketKey: ANY_BUCKET_KEY, events: totals.events, count: totals.count, percent: totalPercent },
+          ...bucketValues,
+        ],
+      };
     });
 
     return { rows, columnMax };
-  }, [bucketKeys, responderGroupedHandTypes, responderHandAggregate]);
+  }, [anySourceBucketKeySet, bucketKeys, responderGroupedHandTypes, responderHandAggregate]);
+
+  const handEventCounts = useMemo(() => {
+    let totalEvents = 0;
+    const counts: Record<string, number> = { [ANY_BUCKET_KEY]: 0 };
+    bucketKeys.forEach((key) => {
+      const value = handAggregate.buckets[key]?.events ?? 0;
+      counts[key] = value;
+      if (anySourceBucketKeySet.has(key)) {
+        totalEvents += value;
+      }
+    });
+    counts[ANY_BUCKET_KEY] = totalEvents;
+    const max = handAggregate.maxEvents;
+    return { counts, max };
+  }, [anySourceBucketKeySet, bucketKeys, handAggregate]);
+
+  const responderHandEventCounts = useMemo(() => {
+    let totalEvents = 0;
+    const counts: Record<string, number> = { [ANY_BUCKET_KEY]: 0 };
+    bucketKeys.forEach((key) => {
+      const value = responderHandAggregate.buckets[key]?.events ?? 0;
+      counts[key] = value;
+      if (anySourceBucketKeySet.has(key)) {
+        totalEvents += value;
+      }
+    });
+    counts[ANY_BUCKET_KEY] = totalEvents;
+    const max = responderHandAggregate.maxEvents;
+    return { counts, max };
+  }, [anySourceBucketKeySet, bucketKeys, responderHandAggregate]);
 
   const handHasEvents = useMemo(
     () => bucketKeys.some((key) => (handAggregate.buckets[key]?.events ?? 0) > 0),
@@ -653,17 +790,17 @@ const FlopResponseMatrix = () => {
 
   const maxAvgRatio = useMemo(
     () =>
-      bucketKeys.reduce((acc, key) => {
-        const ratio = entries[key]?.avgRatio ?? 0;
+      tableBucketKeys.reduce((acc, key) => {
+        const ratio = entriesWithAny[key]?.avgRatio ?? 0;
         return ratio > acc ? ratio : acc;
       }, 0),
-    [bucketKeys, entries],
+    [entriesWithAny, tableBucketKeys],
   );
 
   const foldValueRow = useMemo(() => {
-    const values = bucketKeys.map((key) => {
-      const entry = entries[key];
-      const ratio = entry?.avgRatio ?? BUCKET_REPRESENTATIVE_RATIO[key] ?? 0;
+    const values = tableBucketKeys.map((key) => {
+      const entry = entriesWithAny[key];
+      const ratio = entry?.avgRatio && entry.avgRatio > 0 ? entry.avgRatio : BUCKET_REPRESENTATIVE_RATIO[key] ?? 0;
       if (!entry || ratio <= 0) {
         return 0;
       }
@@ -672,11 +809,11 @@ const FlopResponseMatrix = () => {
     });
     const max = values.reduce((acc, value) => (value > acc ? value : acc), 0);
     return { values, max };
-  }, [bucketKeys, entries]);
+  }, [entriesWithAny, tableBucketKeys]);
 
   const foldValueRiverRow = useMemo(() => {
-    const values = bucketKeys.map((key) => {
-      const entry = entries[key];
+    const values = tableBucketKeys.map((key) => {
+      const entry = entriesWithAny[key];
       if (!entry) {
         return 0;
       }
@@ -695,11 +832,11 @@ const FlopResponseMatrix = () => {
     });
     const max = values.reduce((acc, value) => (value > acc ? value : acc), 0);
     return { values, max };
-  }, [bucketKeys, entries]);
+  }, [entriesWithAny, tableBucketKeys]);
 
   const breakevenRow = useMemo(() => {
-    const values = bucketKeys.map((key) => {
-      const entry = entries[key];
+    const values = tableBucketKeys.map((key) => {
+      const entry = entriesWithAny[key];
       if (!entry) {
         return 0;
       }
@@ -708,11 +845,11 @@ const FlopResponseMatrix = () => {
     });
     const max = values.reduce((acc, value) => (value > acc ? value : acc), 0);
     return { values, max };
-  }, [bucketKeys, entries]);
+  }, [entriesWithAny, tableBucketKeys]);
 
   const foldSurplusRow = useMemo(() => {
-    const values = bucketKeys.map((key) => {
-      const entry = entries[key];
+    const values = tableBucketKeys.map((key) => {
+      const entry = entriesWithAny[key];
       if (!entry) {
         return 0;
       }
@@ -721,11 +858,11 @@ const FlopResponseMatrix = () => {
     });
     const max = values.reduce((acc, value) => (value > acc ? value : acc), 0);
     return { values, max };
-  }, [bucketKeys, entries]);
+  }, [entriesWithAny, tableBucketKeys]);
 
   const potShareRow = useMemo(() => {
-    const values = bucketKeys.map((key) => {
-      const entry = entries[key];
+    const values = tableBucketKeys.map((key) => {
+      const entry = entriesWithAny[key];
       if (!entry) {
         return 0;
       }
@@ -741,7 +878,7 @@ const FlopResponseMatrix = () => {
     }, Number.POSITIVE_INFINITY);
     const min = minValue === Number.POSITIVE_INFINITY ? 0 : minValue;
     return { values, max, min };
-  }, [bucketKeys, entries]);
+  }, [entriesWithAny, tableBucketKeys]);
 
 
   const handleSelect = (setter: (value: string) => void) => (event: ChangeEvent<HTMLSelectElement>) => {
@@ -769,26 +906,92 @@ const FlopResponseMatrix = () => {
   return (
     <Box as="main" px={{ base: 4, md: 8 }} py={{ base: 8, md: 12 }}>
       <Stack spacing={6} maxW="1200px" mx="auto">
-        <Stack spacing={3}>
-          <Heading size="lg">Flop Response Matrix</Heading>
-          <Text color="whiteAlpha.800">
-            Explore how the population reacts to flop bets across all players at the table. Adjust the filters to slice
-            the pool by bettor position, bet classification, and table size. Percentages show villain actions relative
-            to the number of bets in each sizing bucket.
-          </Text>
-          <Stack spacing={1} fontSize="sm" color="whiteAlpha.700">
-            <Text fontWeight="semibold">Bet Type Definitions</Text>
-            <Text>
-              • <strong>Continuation Bet (c-bet)</strong>: preflop aggressor fires the flop.
-            </Text>
-            <Text>
-              • <strong>Donk Bet</strong>: a non-aggressor leads into the preflop raiser before they act.
-            </Text>
-            <Text>
-              • <strong>Stab / Other</strong>: any other flop bet (missed c-bet stabs, limped pots, etc.).
-            </Text>
+        <Box
+          position="sticky"
+          top="0"
+          zIndex="docked"
+          bg="gray.900"
+          pt={{ base: 4, md: 6 }}
+          pb={{ base: 4, md: 5 }}
+          borderBottom="1px solid"
+          borderColor="whiteAlpha.200"
+        >
+          <Stack spacing={4}>
+            <Stack spacing={3}>
+              <Heading size="lg">Flop Response Matrix</Heading>
+              <Text color="whiteAlpha.800">
+                Explore how the population reacts to flop bets across all players at the table. Adjust the filters to slice
+                the pool by bettor position, bet classification, and table size. Percentages show villain actions relative
+                to the number of bets in each sizing bucket.
+              </Text>
+              <Stack spacing={showBetTypeDefinitions ? 1 : 0} fontSize="sm" color="whiteAlpha.700">
+                <Flex align="center" gap={3}>
+                  <Text fontWeight="semibold">Bet Type Definitions</Text>
+                  <Button
+                    onClick={() => setShowBetTypeDefinitions((value) => !value)}
+                    size="xs"
+                    variant="link"
+                    colorScheme="blue"
+                  >
+                    {showBetTypeDefinitions ? 'Hide' : 'Show'}
+                  </Button>
+                </Flex>
+                {showBetTypeDefinitions && (
+                  <>
+                    <Text>
+                      • <strong>Continuation Bet (c-bet)</strong>: preflop aggressor fires the flop.
+                    </Text>
+                    <Text>
+                      • <strong>Donk Bet</strong>: a non-aggressor leads into the preflop raiser before they act.
+                    </Text>
+                    <Text>
+                      • <strong>Stab / Other</strong>: any other flop bet (missed c-bet stabs, limped pots, etc.).
+                    </Text>
+                  </>
+                )}
+              </Stack>
+            </Stack>
+
+            <Flex gap={3} wrap="wrap">
+              <FormControl flex="1 1 160px" maxW="180px">
+                <FormLabel fontSize="sm">Bettor position</FormLabel>
+                <Select value={heroPosition} onChange={handleSelect(setHeroPosition)}>
+                  {heroPositionOptions.map(renderOption)}
+                </Select>
+              </FormControl>
+              <FormControl flex="1 1 160px" maxW="180px">
+                <FormLabel fontSize="sm">Bet classification</FormLabel>
+                <Select value={betType} onChange={handleSelect(setBetType)}>
+                  {betTypeOptions.map(renderOption)}
+                </Select>
+              </FormControl>
+              <FormControl flex="1 1 160px" maxW="180px">
+                <FormLabel fontSize="sm">Flop texture</FormLabel>
+                <Select value={texture} onChange={handleSelect(setTexture)}>
+                  {textureOptions.map(renderOption)}
+                </Select>
+              </FormControl>
+              <FormControl flex="1 1 160px" maxW="180px">
+                <FormLabel fontSize="sm">Preflop action</FormLabel>
+                <Select value={preflopCategory} onChange={handleSelect(setPreflopCategory)}>
+                  {preflopOptionsWithFallback.map(renderOption)}
+                </Select>
+              </FormControl>
+              <FormControl flex="1 1 160px" maxW="180px">
+                <FormLabel fontSize="sm">Players on flop</FormLabel>
+                <Select value={playerCount} onChange={handleSelect(setPlayerCount)}>
+                  {playerCountOptions.map(renderOption)}
+                </Select>
+              </FormControl>
+              <FormControl flex="1 1 160px" maxW="180px">
+                <FormLabel fontSize="sm">Bettor IP / OOP</FormLabel>
+                <Select value={position} onChange={handleSelect(setPosition)}>
+                  {positionOptions.map(renderOption)}
+                </Select>
+              </FormControl>
+            </Flex>
           </Stack>
-        </Stack>
+        </Box>
 
         {error && (
           <Alert status={usingSample ? 'warning' : 'error'} variant="left-accent">
@@ -810,45 +1013,6 @@ const FlopResponseMatrix = () => {
             {responderError}
           </Alert>
         )}
-
-        <Flex gap={3} wrap="wrap">
-          <FormControl flex="1 1 160px" maxW="180px">
-            <FormLabel fontSize="sm">Bettor position</FormLabel>
-            <Select value={heroPosition} onChange={handleSelect(setHeroPosition)}>
-              {heroPositionOptions.map(renderOption)}
-            </Select>
-          </FormControl>
-          <FormControl flex="1 1 160px" maxW="180px">
-            <FormLabel fontSize="sm">Bet classification</FormLabel>
-            <Select value={betType} onChange={handleSelect(setBetType)}>
-              {betTypeOptions.map(renderOption)}
-            </Select>
-          </FormControl>
-          <FormControl flex="1 1 160px" maxW="180px">
-            <FormLabel fontSize="sm">Flop texture</FormLabel>
-            <Select value={texture} onChange={handleSelect(setTexture)}>
-              {textureOptions.map(renderOption)}
-            </Select>
-          </FormControl>
-          <FormControl flex="1 1 160px" maxW="180px">
-            <FormLabel fontSize="sm">Preflop action</FormLabel>
-            <Select value={preflopCategory} onChange={handleSelect(setPreflopCategory)}>
-              {preflopOptionsWithFallback.map(renderOption)}
-            </Select>
-          </FormControl>
-          <FormControl flex="1 1 160px" maxW="180px">
-            <FormLabel fontSize="sm">Players on flop</FormLabel>
-            <Select value={playerCount} onChange={handleSelect(setPlayerCount)}>
-              {playerCountOptions.map(renderOption)}
-            </Select>
-          </FormControl>
-          <FormControl flex="1 1 160px" maxW="180px">
-            <FormLabel fontSize="sm">Bettor IP / OOP</FormLabel>
-            <Select value={position} onChange={handleSelect(setPosition)}>
-              {positionOptions.map(renderOption)}
-            </Select>
-          </FormControl>
-        </Flex>
 
         {!hasEvents && (
           <Alert status="info" variant="left-accent">
@@ -938,7 +1102,7 @@ const FlopResponseMatrix = () => {
                   Hand Strength
                 </Th>
                 <Th
-                  colSpan={bucketKeys.length}
+                  colSpan={tableBucketKeys.length}
                   textAlign="center"
                   borderBottom="1px solid"
                   borderColor="whiteAlpha.300"
@@ -947,7 +1111,7 @@ const FlopResponseMatrix = () => {
                 </Th>
               </Tr>
               <Tr>
-                {filteredBucketOrder.map((bucket) => (
+                {displayBucketOrder.map((bucket) => (
                   <Th key={`hand-${bucket.key}`} textAlign="right" borderBottom="1px solid" borderColor="whiteAlpha.300">
                     {bucket.label}
                   </Th>
@@ -957,9 +1121,12 @@ const FlopResponseMatrix = () => {
             <Tbody>
               <Tr>
                 <Th scope="row">Event Count</Th>
-                {bucketKeys.map((key) => {
-                  const value = handAggregate.buckets[key]?.events ?? 0;
-                  const { bg, color } = deriveCountColor(value, handAggregate.maxEvents);
+                {tableBucketKeys.map((key) => {
+                  const value = handEventCounts.counts[key] ?? 0;
+                  const isAnyBucket = key === ANY_BUCKET_KEY;
+                  const { bg, color } = isAnyBucket
+                    ? { bg: 'white', color: 'gray.900' }
+                    : deriveCountColor(value, handEventCounts.max);
                   return (
                     <Td key={`hand-events-${key}`} isNumeric fontWeight="semibold" bg={bg} color={color}>
                       {value.toLocaleString()}
@@ -1046,7 +1213,7 @@ const FlopResponseMatrix = () => {
                   Response
                 </Th>
                 <Th
-                  colSpan={bucketKeys.length}
+                  colSpan={tableBucketKeys.length}
                   textAlign="center"
                   borderBottom="1px solid"
                   borderColor="whiteAlpha.300"
@@ -1055,7 +1222,7 @@ const FlopResponseMatrix = () => {
                 </Th>
               </Tr>
               <Tr>
-                {filteredBucketOrder.map((bucket) => (
+                {displayBucketOrder.map((bucket) => (
                   <Th key={bucket.key} textAlign="right" borderBottom="1px solid" borderColor="whiteAlpha.300">
                     {bucket.label}
                   </Th>
@@ -1065,9 +1232,12 @@ const FlopResponseMatrix = () => {
             <Tbody>
               <Tr>
                 <Th scope="row">Event Count</Th>
-                {bucketKeys.map((key) => {
-                  const value = entries[key]?.events ?? 0;
-                  const { bg, color } = deriveCountColor(value, maxEvents);
+                {tableBucketKeys.map((key) => {
+                  const value = entriesWithAny[key]?.events ?? 0;
+                  const isAnyBucket = key === ANY_BUCKET_KEY;
+                  const { bg, color } = isAnyBucket
+                    ? { bg: 'white', color: 'gray.900' }
+                    : deriveCountColor(value, responseEventMax);
                   return (
                     <Td key={`events-${key}`} isNumeric fontWeight="semibold" bg={bg} color={color}>
                       {value.toLocaleString()}
@@ -1077,8 +1247,8 @@ const FlopResponseMatrix = () => {
               </Tr>
               <Tr>
                 <Th scope="row">Avg Bet Size (% Pot)</Th>
-                {bucketKeys.map((key) => {
-                  const ratio = entries[key]?.avgRatio ?? 0;
+                {tableBucketKeys.map((key) => {
+                  const ratio = entriesWithAny[key]?.avgRatio ?? 0;
                   const { bg, color } = deriveCountColor(ratio, maxAvgRatio);
                   return (
                     <Td key={`avg-ratio-${key}`} isNumeric bg={ratio > 0 ? bg : 'white'} color={ratio > 0 ? color : 'gray.700'}>
@@ -1095,8 +1265,8 @@ const FlopResponseMatrix = () => {
               ] as Array<{ key: TableRowKey; label: string }>).map((row) => (
                 <Tr key={row.key}>
                   <Th scope="row">{row.label}</Th>
-                  {bucketKeys.map((key) => {
-                    const value = entries[key]?.[row.key] ?? 0;
+                  {tableBucketKeys.map((key) => {
+                    const value = entriesWithAny[key]?.[row.key] ?? 0;
                     const { bg, color } = derivePercentColor(value, responseColumnMax[key] ?? 0);
                     return (
                       <Td key={`${row.key}-${key}`} isNumeric bg={value > 0 ? bg : 'white'} color={value > 0 ? color : 'gray.700'}>
@@ -1108,7 +1278,7 @@ const FlopResponseMatrix = () => {
               ))}
               <Tr>
                 <Th scope="row">Fold Value (Flop Pot Share)</Th>
-                {bucketKeys.map((key, index) => {
+                {tableBucketKeys.map((key, index) => {
                   const value = foldValueRow.values[index];
                   const { bg, color } = deriveRowGradient(value, foldValueRow.max, 'red');
                   return (
@@ -1120,7 +1290,7 @@ const FlopResponseMatrix = () => {
               </Tr>
               <Tr>
                 <Th scope="row">Fold Value (River Pot Share)</Th>
-                {bucketKeys.map((key, index) => {
+                {tableBucketKeys.map((key, index) => {
                   const value = foldValueRiverRow.values[index];
                   const { bg, color } = deriveRowGradient(value, foldValueRiverRow.max, 'red');
                   return (
@@ -1132,7 +1302,7 @@ const FlopResponseMatrix = () => {
               </Tr>
               <Tr>
                 <Th scope="row">Breakeven Fold %</Th>
-                {bucketKeys.map((key, index) => {
+                {tableBucketKeys.map((key, index) => {
                   const value = breakevenRow.values[index];
                   const { bg, color } = deriveRowGradient(value, breakevenRow.max, 'red');
                   return (
@@ -1144,7 +1314,7 @@ const FlopResponseMatrix = () => {
               </Tr>
               <Tr>
                 <Th scope="row">Fold Surplus</Th>
-                {bucketKeys.map((key, index) => {
+                {tableBucketKeys.map((key, index) => {
                   const value = foldSurplusRow.values[index];
                   const { bg, color } = deriveRowGradient(value, foldSurplusRow.max, 'red');
                   return (
@@ -1156,7 +1326,7 @@ const FlopResponseMatrix = () => {
               </Tr>
               <Tr>
                 <Th scope="row">Avg Pot Share Added (×Pot)</Th>
-                {bucketKeys.map((key, index) => {
+                {tableBucketKeys.map((key, index) => {
                   const value = potShareRow.values[index];
                   const { bg, color } = deriveRowGradient(value, potShareRow.max, 'orange', potShareRow.min);
                   return (
@@ -1171,24 +1341,39 @@ const FlopResponseMatrix = () => {
         </Box>
 
         <Stack spacing={1} fontSize="sm" color="whiteAlpha.700">
-          <Text>
-            <strong>Avg Bet Size (% Pot)</strong> - shows the average bet-to-pot ratio for each bucket expressed as a percentage of the pot at the time of the flop bet.
-          </Text>
-          <Text>
-            <strong>Fold Value (Flop Pot Share)</strong> - multiplies the fold percentage by the average bet-to-pot ratio for each bucket, approximating how much of the flop pot you claim when opponents fold immediately.
-          </Text>
-          <Text>
-            <strong>Fold Value (River Pot Share)</strong> - applies the same fold percentage to the average share of the eventual pot (expressed in flop-pot multiples), estimating how much of the long-run pot you lock up via immediate folds.
-          </Text>
-          <Text>
-            <strong>Breakeven Fold %</strong> - averages the fold frequency required for each bet to break even, computed from individual bet-to-pot ratios.
-          </Text>
-          <Text>
-            <strong>Fold Surplus</strong> - subtracts the breakeven fold rate from the observed fold rate, highlighting how much extra fold equity the bucket produces.
-          </Text>
-          <Text>
-            <strong>Avg Pot Share Added (×Pot)</strong> - expresses the average amount added to the pot across all streets, including the flop, as multiples of the pot size immediately before the flop bet.
-          </Text>
+          <Flex align="center" gap={3}>
+            <Text fontWeight="semibold">Bet Response Definitions</Text>
+            <Button
+              onClick={() => setShowResponseDefinitions((value) => !value)}
+              size="xs"
+              variant="link"
+              colorScheme="blue"
+            >
+              {showResponseDefinitions ? 'Hide' : 'Show'}
+            </Button>
+          </Flex>
+          {showResponseDefinitions && (
+            <>
+              <Text>
+                <strong>Avg Bet Size (% Pot)</strong> - shows the average bet-to-pot ratio for each bucket expressed as a percentage of the pot at the time of the flop bet.
+              </Text>
+              <Text>
+                <strong>Fold Value (Flop Pot Share)</strong> - multiplies the fold percentage by the average bet-to-pot ratio for each bucket, approximating how much of the flop pot you claim when opponents fold immediately.
+              </Text>
+              <Text>
+                <strong>Fold Value (River Pot Share)</strong> - applies the same fold percentage to the average share of the eventual pot (expressed in flop-pot multiples), estimating how much of the long-run pot you lock up via immediate folds.
+              </Text>
+              <Text>
+                <strong>Breakeven Fold %</strong> - averages the fold frequency required for each bet to break even, computed from individual bet-to-pot ratios.
+              </Text>
+              <Text>
+                <strong>Fold Surplus</strong> - subtracts the breakeven fold rate from the observed fold rate, highlighting how much extra fold equity the bucket produces.
+              </Text>
+              <Text>
+                <strong>Avg Pot Share Added (×Pot)</strong> - expresses the average amount added to the pot across all streets, including the flop, as multiples of the pot size immediately before the flop bet.
+              </Text>
+            </>
+          )}
         </Stack>
 
         <Stack spacing={3} pt={{ base: 4, md: 6 }}>
@@ -1285,7 +1470,7 @@ const FlopResponseMatrix = () => {
                   Hand Strength
                 </Th>
                 <Th
-                  colSpan={bucketKeys.length}
+                  colSpan={tableBucketKeys.length}
                   textAlign="center"
                   borderBottom="1px solid"
                   borderColor="whiteAlpha.300"
@@ -1294,7 +1479,7 @@ const FlopResponseMatrix = () => {
                 </Th>
               </Tr>
               <Tr>
-                {filteredBucketOrder.map((bucket) => (
+                {displayBucketOrder.map((bucket) => (
                   <Th key={`responder-${bucket.key}`} textAlign="right" borderBottom="1px solid" borderColor="whiteAlpha.300">
                     {bucket.label}
                   </Th>
@@ -1304,9 +1489,12 @@ const FlopResponseMatrix = () => {
             <Tbody>
               <Tr>
                 <Th scope="row">Event Count</Th>
-                {bucketKeys.map((key) => {
-                  const value = responderHandAggregate.buckets[key]?.events ?? 0;
-                  const { bg, color } = deriveCountColor(value, responderHandAggregate.maxEvents);
+                {tableBucketKeys.map((key) => {
+                  const value = responderHandEventCounts.counts[key] ?? 0;
+                  const isAnyBucket = key === ANY_BUCKET_KEY;
+                  const { bg, color } = isAnyBucket
+                    ? { bg: 'white', color: 'gray.900' }
+                    : deriveCountColor(value, responderHandEventCounts.max);
                   return (
                     <Td key={`responder-events-${key}`} isNumeric fontWeight="semibold" bg={bg} color={color}>
                       {value.toLocaleString()}
