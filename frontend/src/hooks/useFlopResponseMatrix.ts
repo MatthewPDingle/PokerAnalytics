@@ -26,6 +26,7 @@ export type FlopResponseScenario = {
   playerCount: number;
   textureKey: string;
   preflopKey: string;
+  sprBucket?: string;
   metrics: FlopResponseMetric[];
 };
 
@@ -42,6 +43,7 @@ type RawPayload = {
   hero_positions: string[];
   textures: SelectOption[];
   preflop_categories: SelectOption[];
+  spr_buckets?: SelectOption[];
   scenarios: Array<{
     hero_position: string;
     bet_type: string;
@@ -49,6 +51,7 @@ type RawPayload = {
     player_count: number;
     texture_key: string;
     preflop_key: string;
+    spr_bucket?: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -84,6 +87,7 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
     playerCount: 2,
     textureKey: 'any',
     preflopKey: 'any',
+    sprBucket: 'any',
     metrics: SAMPLE_BUCKET_ORDER.map((bucket) => {
       switch (bucket.key) {
         case 'pct_40_60':
@@ -194,6 +198,7 @@ const SAMPLE_SCENARIOS: FlopResponseScenario[] = [
     playerCount: 3,
     textureKey: 'any',
     preflopKey: 'any',
+    sprBucket: 'any',
     metrics: SAMPLE_BUCKET_ORDER.map((bucket) => {
       if (bucket.key === 'pct_25_40') {
         return {
@@ -247,6 +252,7 @@ type HookState = {
   heroPositions: string[];
   textures: SelectOption[];
   preflopOptions: SelectOption[];
+  sprBuckets: SelectOption[];
   loading: boolean;
   error: string | null;
   usingSample: boolean;
@@ -261,6 +267,7 @@ const initialState: HookState = {
   heroPositions: [],
   textures: [],
   preflopOptions: [],
+  sprBuckets: [],
   loading: true,
   error: null,
   usingSample: false,
@@ -274,6 +281,7 @@ const transformPayload = (payload: RawPayload): HookState => {
     playerCount: scenario.player_count,
     textureKey: scenario.texture_key,
     preflopKey: scenario.preflop_key,
+    sprBucket: scenario.spr_bucket ?? 'any',
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,
@@ -308,6 +316,12 @@ const transformPayload = (payload: RawPayload): HookState => {
         { key: 'single_raise', label: 'Single-Raise Pot' },
         { key: 'three_bet_plus', label: '3-Bet+ Pot' },
       ],
+    sprBuckets:
+      payload.spr_buckets ?? [
+        { key: '<=1', label: '<= 1' },
+        { key: '1-2', label: '1-2' },
+        { key: '2-4', label: '2-4' },
+      ],
     loading: false,
     error: null,
     usingSample: false,
@@ -330,6 +344,11 @@ const SAMPLE_STATE: HookState = {
     { key: 'limped', label: 'Limped Pot (No Raise)' },
     { key: 'single_raise', label: 'Single-Raise Pot' },
     { key: 'three_bet_plus', label: '3-Bet+ Pot' },
+  ],
+  sprBuckets: [
+    { key: '<=1', label: '<= 1' },
+    { key: '1-2', label: '1-2' },
+    { key: '2-4', label: '2-4' },
   ],
   loading: false,
   error: 'Using sample flop response data (API unavailable).',

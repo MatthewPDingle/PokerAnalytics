@@ -15,6 +15,7 @@ export type ResponderHandScenario = {
   responseType: 'call' | 'raise';
   textureKey: string;
   preflopKey: string;
+  sprBucket: string;
   metrics: ResponderHandMetric[];
 };
 
@@ -39,6 +40,7 @@ type RawResponderPayload = {
   response_types: Array<{ key: string; label: string }>;
   textures: Array<{ key: string; label: string }>;
   preflop_categories: Array<{ key: string; label: string }>;
+  spr_buckets?: Array<{ key: string; label: string }>;
   scenarios: Array<{
     hero_position: string;
     bet_line: string;
@@ -47,6 +49,7 @@ type RawResponderPayload = {
     response_type: 'call' | 'raise';
     texture_key: string;
     preflop_key: string;
+    spr_bucket?: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -123,6 +126,7 @@ const SAMPLE_SCENARIOS: ResponderHandScenario[] = [
     responseType: 'call',
     textureKey: 'any',
     preflopKey: 'any',
+    sprBucket: 'any',
     metrics: SAMPLE_BUCKETS.map((bucket) => ({
       bucketKey: bucket.key,
       bucketLabel: bucket.label,
@@ -146,6 +150,7 @@ const SAMPLE_SCENARIOS: ResponderHandScenario[] = [
     responseType: 'raise',
     textureKey: 'any',
     preflopKey: 'any',
+    sprBucket: 'any',
     metrics: SAMPLE_BUCKETS.map((bucket) => ({
       bucketKey: bucket.key,
       bucketLabel: bucket.label,
@@ -226,6 +231,7 @@ const transformPayload = (payload: RawResponderPayload): ResponderMatrixState =>
     responseType: scenario.response_type,
     textureKey: scenario.texture_key,
     preflopKey: scenario.preflop_key,
+    sprBucket: scenario.spr_bucket ?? 'any',
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,

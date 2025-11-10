@@ -477,19 +477,22 @@ const categorizeEffectiveStack = (value: number): string => {
 };
 
 const categorizeSPR = (spr: number): string => {
-  if (spr < 1) {
-    return '0-1';
+  if (spr <= 1) {
+    return '<=1';
   }
   if (spr < 2) {
     return '1-2';
   }
-  if (spr < 3) {
-    return '2-3';
-  }
   if (spr < 4) {
-    return '3-4';
+    return '2-4';
   }
-  return '4+';
+  if (spr < 6) {
+    return '4-6';
+  }
+  if (spr < 10) {
+    return '6-10';
+  }
+  return '10+';
 };
 
 const mapPotOddsBucket = (ratio: number | null): string | null => {

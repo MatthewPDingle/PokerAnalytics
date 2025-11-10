@@ -137,6 +137,7 @@ const deriveRowGradient = (value: number, rowMax: number, palette: 'orange' | 'r
 const ANY_BUCKET_KEY = 'any_bucket';
 
 const ANY_OPTION: SelectOption = { key: '', label: 'Any' };
+const SPR_ANY_OPTION: SelectOption = { key: 'any', label: 'All SPRs' };
 
 const NON_UNIQUE_BUCKET_KEYS = new Set(['all_in', 'one_bb']);
 
@@ -240,6 +241,7 @@ const TurnResponseMatrix = () => {
     heroPositions,
     textures,
     preflopOptions,
+    sprBuckets,
     loading,
     error,
     usingSample,
@@ -251,6 +253,7 @@ const TurnResponseMatrix = () => {
   const [playerCount, setPlayerCount] = useState('');
   const [texture, setTexture] = useState('any');
   const [preflopCategory, setPreflopCategory] = useState('any');
+  const [sprBucket, setSprBucket] = useState('any');
   const [groupedHandTypes, setGroupedHandTypes] = useState(true);
   const [responderGroupedHandTypes, setResponderGroupedHandTypes] = useState(true);
   const [responderResponseType, setResponderResponseType] = useState<'call' | 'raise' | 'continue'>('call');
@@ -320,6 +323,21 @@ const TurnResponseMatrix = () => {
     ];
   }, [preflopOptions]);
 
+  const sprBucketOptions = useMemo(() => {
+    if (sprBuckets.length > 0) {
+      return [SPR_ANY_OPTION, ...sprBuckets];
+    }
+    return [
+      SPR_ANY_OPTION,
+      { key: '<=1', label: '<= 1' },
+      { key: '1-2', label: '1-2' },
+      { key: '2-4', label: '2-4' },
+      { key: '4-6', label: '4-6' },
+      { key: '6-10', label: '6-10' },
+      { key: '10+', label: '10+' },
+    ];
+  }, [sprBuckets]);
+
   useEffect(() => {
     if (!textureOptions.some((option) => option.key === texture)) {
       setTexture(textureOptions[0]?.key ?? 'any');
@@ -331,6 +349,12 @@ const TurnResponseMatrix = () => {
       setPreflopCategory(preflopOptionsWithFallback[0]?.key ?? 'any');
     }
   }, [preflopOptionsWithFallback, preflopCategory]);
+
+  useEffect(() => {
+    if (!sprBucketOptions.some((option) => option.key === sprBucket)) {
+      setSprBucket(sprBucketOptions[0]?.key ?? 'any');
+    }
+  }, [sprBucketOptions, sprBucket]);
 
   const availablePlayerCounts = useMemo(() => {
     const counts = new Set<number>();
@@ -360,11 +384,19 @@ const TurnResponseMatrix = () => {
       } else if (scenarioPreflop !== preflopCategory) {
         return;
       }
+      const scenarioSpr = scenario.sprBucket ?? 'any';
+      if (sprBucket === 'any') {
+        if (scenarioSpr !== 'any') {
+          return;
+        }
+      } else if (scenarioSpr !== sprBucket) {
+        return;
+      }
       counts.add(scenario.playerCount);
     });
     const sorted = Array.from(counts).sort((a, b) => a - b);
     return sorted;
-  }, [data, heroPosition, betLine, position, texture, preflopCategory]);
+  }, [data, heroPosition, betLine, position, texture, preflopCategory, sprBucket]);
 
   useEffect(() => {
     if (!playerCount) {
@@ -434,9 +466,17 @@ const TurnResponseMatrix = () => {
       } else if (scenarioPreflop !== preflopCategory) {
         return false;
       }
+      const scenarioSpr = scenario.sprBucket ?? 'any';
+      if (sprBucket === 'any') {
+        if (scenarioSpr !== 'any') {
+          return false;
+        }
+      } else if (scenarioSpr !== sprBucket) {
+        return false;
+      }
       return true;
     });
-  }, [data, heroPosition, betLine, position, playerCount, texture, preflopCategory]);
+  }, [data, heroPosition, betLine, position, playerCount, texture, preflopCategory, sprBucket]);
 
   const matchingHandScenarios = useMemo(() => {
     return handData.filter((scenario) => {
@@ -468,9 +508,17 @@ const TurnResponseMatrix = () => {
       } else if (scenarioPreflop !== preflopCategory) {
         return false;
       }
+      const scenarioSpr = scenario.sprBucket ?? 'any';
+      if (sprBucket === 'any') {
+        if (scenarioSpr !== 'any') {
+          return false;
+        }
+      } else if (scenarioSpr !== sprBucket) {
+        return false;
+      }
       return true;
     });
-  }, [handData, heroPosition, betLine, position, playerCount, texture, preflopCategory]);
+  }, [handData, heroPosition, betLine, position, playerCount, texture, preflopCategory, sprBucket]);
 
   const matchingResponderScenarios = useMemo(() => {
     return responderData.filter((scenario) => {
@@ -515,9 +563,27 @@ const TurnResponseMatrix = () => {
       } else if (scenarioPreflop !== preflopCategory) {
         return false;
       }
+      const scenarioSpr = scenario.sprBucket ?? 'any';
+      if (sprBucket === 'any') {
+        if (scenarioSpr !== 'any') {
+          return false;
+        }
+      } else if (scenarioSpr !== sprBucket) {
+        return false;
+      }
       return true;
     });
-  }, [responderData, heroPosition, betLine, position, playerCount, responderResponseType, texture, preflopCategory]);
+  }, [
+    responderData,
+    heroPosition,
+    betLine,
+    position,
+    playerCount,
+    responderResponseType,
+    texture,
+    preflopCategory,
+    sprBucket,
+  ]);
 
   const aggregates = useMemo(() => combineScenarios(matchingScenarios), [matchingScenarios]);
   const { entries, maxEvents } = useMemo(
@@ -999,6 +1065,12 @@ const TurnResponseMatrix = () => {
                 <FormLabel fontSize="sm">Bettor IP / OOP</FormLabel>
                 <Select value={position} onChange={handleSelect(setPosition)}>
                   {positionOptions.map(renderOption)}
+                </Select>
+              </FormControl>
+              <FormControl flex="1 1 160px" maxW="180px">
+                <FormLabel fontSize="sm">SPR bucket</FormLabel>
+                <Select value={sprBucket} onChange={handleSelect(setSprBucket)}>
+                  {sprBucketOptions.map(renderOption)}
                 </Select>
               </FormControl>
             </Flex>

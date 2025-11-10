@@ -19,6 +19,7 @@ export type HandScenario = {
   playerCount: number;
   textureKey: string;
   preflopKey: string;
+  sprBucket: string;
   metrics: HandMetric[];
 };
 
@@ -48,6 +49,7 @@ type RawPayload = {
   player_counts: number[];
   textures: Array<{ key: string; label: string }>;
   preflop_categories: Array<{ key: string; label: string }>;
+  spr_buckets?: Array<{ key: string; label: string }>;
   scenarios: Array<{
     hero_position: string;
     bet_type: string;
@@ -56,6 +58,7 @@ type RawPayload = {
     player_count: number;
     texture_key: string;
     preflop_key: string;
+    spr_bucket?: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -128,6 +131,7 @@ const SAMPLE_SCENARIOS: HandScenario[] = [
     playerCount: 2,
     textureKey: 'any',
     preflopKey: 'any',
+    sprBucket: 'any',
     metrics: SAMPLE_BUCKETS.map((bucket, index) => {
       if (bucket.key === 'pct_40_60') {
         return {
@@ -222,6 +226,7 @@ const transform = (payload: RawPayload): HandMatrixState => {
     playerCount: scenario.player_count,
     textureKey: scenario.texture_key,
     preflopKey: scenario.preflop_key,
+    sprBucket: scenario.spr_bucket ?? 'any',
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,

@@ -26,6 +26,7 @@ export type RiverResponseScenario = {
   playerCount: number;
   textureKey: string;
   preflopKey: string;
+  sprBucket: string;
   metrics: RiverResponseMetric[];
 };
 
@@ -42,6 +43,7 @@ type RawPayload = {
   hero_positions: string[];
   textures: SelectOption[];
   preflop_categories: SelectOption[];
+  spr_buckets?: SelectOption[];
   scenarios: Array<{
     hero_position: string;
     bet_line: string;
@@ -49,6 +51,7 @@ type RawPayload = {
     player_count: number;
     texture_key: string;
     preflop_key: string;
+    spr_bucket?: string;
     metrics: Array<{
       bucket_key: string;
       bucket_label: string;
@@ -84,6 +87,7 @@ const SAMPLE_SCENARIOS: RiverResponseScenario[] = [
     playerCount: 2,
     textureKey: 'any',
     preflopKey: 'any',
+    sprBucket: 'any',
     metrics: SAMPLE_BUCKET_ORDER.map((bucket) => {
       switch (bucket.key) {
         case 'pct_40_60':
@@ -194,6 +198,7 @@ const SAMPLE_SCENARIOS: RiverResponseScenario[] = [
     playerCount: 3,
     textureKey: 'any',
     preflopKey: 'any',
+    sprBucket: 'any',
     metrics: SAMPLE_BUCKET_ORDER.map((bucket) => {
       if (bucket.key === 'pct_25_40') {
         return {
@@ -238,6 +243,15 @@ const SAMPLE_POSITIONS: SelectOption[] = [
   { key: 'OOP', label: 'Out of Position' },
 ];
 
+const DEFAULT_SPR_BUCKETS: SelectOption[] = [
+  { key: '<=1', label: '<= 1' },
+  { key: '1-2', label: '1-2' },
+  { key: '2-4', label: '2-4' },
+  { key: '4-6', label: '4-6' },
+  { key: '6-10', label: '6-10' },
+  { key: '10+', label: '10+' },
+];
+
 type HookState = {
   data: RiverResponseScenario[];
   bucketOrder: RiverBucketMeta[];
@@ -247,6 +261,7 @@ type HookState = {
   heroPositions: string[];
   textures: SelectOption[];
   preflopOptions: SelectOption[];
+  sprBuckets: SelectOption[];
   loading: boolean;
   error: string | null;
   usingSample: boolean;
@@ -261,6 +276,7 @@ const initialState: HookState = {
   heroPositions: [],
   textures: [],
   preflopOptions: [],
+  sprBuckets: [],
   loading: true,
   error: null,
   usingSample: false,
@@ -274,6 +290,7 @@ const transformPayload = (payload: RawPayload): HookState => {
     playerCount: scenario.player_count,
     textureKey: scenario.texture_key,
     preflopKey: scenario.preflop_key,
+    sprBucket: scenario.spr_bucket ?? 'any',
     metrics: scenario.metrics.map((metric) => ({
       bucketKey: metric.bucket_key,
       bucketLabel: metric.bucket_label,
@@ -308,6 +325,7 @@ const transformPayload = (payload: RawPayload): HookState => {
         { key: 'single_raise', label: 'Single-Raise Pot' },
         { key: 'three_bet_plus', label: '3-Bet+ Pot' },
       ],
+    sprBuckets: payload.spr_buckets ?? DEFAULT_SPR_BUCKETS,
     loading: false,
     error: null,
     usingSample: false,
@@ -331,6 +349,7 @@ const SAMPLE_STATE: HookState = {
     { key: 'single_raise', label: 'Single-Raise Pot' },
     { key: 'three_bet_plus', label: '3-Bet+ Pot' },
   ],
+  sprBuckets: DEFAULT_SPR_BUCKETS,
   loading: false,
   error: 'Using sample river response data (API unavailable).',
   usingSample: true,

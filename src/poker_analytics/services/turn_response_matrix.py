@@ -53,6 +53,16 @@ TEXTURE_OPTIONS: Sequence[Mapping[str, str]] = [
 ]
 TEXTURE_ORDER = {option["key"]: index for index, option in enumerate(TEXTURE_OPTIONS)}
 
+SPR_BUCKET_OPTIONS: Sequence[Mapping[str, str]] = (
+    {"key": "<=1", "label": "<= 1"},
+    {"key": "1-2", "label": "1-2"},
+    {"key": "2-4", "label": "2-4"},
+    {"key": "4-6", "label": "4-6"},
+    {"key": "6-10", "label": "6-10"},
+    {"key": "10+", "label": "10+"},
+)
+SPR_BUCKET_ORDER = {"any": 0, **{option["key"]: index + 1 for index, option in enumerate(SPR_BUCKET_OPTIONS)}}
+SPR_BUCKET_KEYS = set(SPR_BUCKET_ORDER.keys())
 
 def load_turn_response_matrix() -> dict:
     """Return the aggregated payload used by the frontend heatmap."""
@@ -93,6 +103,7 @@ def build_turn_response_payload(events: Iterable[Mapping[str, object]]) -> dict:
         hero_positions,
         texture_keys_seen,
         preflop_keys_seen,
+        spr_buckets_seen,
     ) = _aggregate_events(events)
     payload = {
         "version": CURRENT_VERSION,
@@ -111,14 +122,19 @@ def build_turn_response_payload(events: Iterable[Mapping[str, object]]) -> dict:
             for option in PREFLOP_OPTIONS
             if option["key"] == PREFLOP_ANY_KEY or option["key"] in preflop_keys_seen
         ],
+        "spr_buckets": [
+            option
+            for option in SPR_BUCKET_OPTIONS
+            if option["key"] in spr_buckets_seen
+        ],
         "scenarios": scenarios,
     }
     return payload
 
 
-def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict], List[int], List[str], set[str], set[str]]:
+def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict], List[int], List[str], set[str], set[str], set[str]]:
     aggregate: MutableMapping[
-        Tuple[str, str, str, int, str, str],
+        Tuple[str, str, str, int, str, str, str],
         MutableMapping[str, Dict[str, float]],
     ] = defaultdict(
         lambda: {
@@ -140,6 +156,7 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
     hero_positions: set[str] = set()
     texture_keys_seen: set[str] = set()
     preflop_keys_seen: set[str] = set()
+    spr_buckets_seen: set[str] = set()
 
     for event in events:
         hero_position = event.get("hero_position")
@@ -187,28 +204,44 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
         texture_keys_seen.update(event_texture_keys)
         preflop_keys_seen.add(preflop_bucket(event.get("preflop_aggression_level")))
 
+        spr_bucket_raw = event.get("spr_bucket")
+        spr_bucket_value = spr_bucket_raw if isinstance(spr_bucket_raw, str) and spr_bucket_raw in SPR_BUCKET_KEYS else None
+        spr_bucket_keys_for_event = ["any"]
+        if spr_bucket_value and spr_bucket_value != "any":
+            spr_bucket_keys_for_event.append(spr_bucket_value)
+            spr_buckets_seen.add(spr_bucket_value)
+
         for texture_key in texture_keys_for_event:
             for preflop_key in preflop_keys_for_event:
-                scenario_key = (hero_position, bet_line, position, player_count, texture_key, preflop_key)
-                bucket_map = aggregate[scenario_key]
+                for spr_key in spr_bucket_keys_for_event:
+                    scenario_key = (hero_position, bet_line, position, player_count, texture_key, preflop_key, spr_key)
+                    bucket_map = aggregate[scenario_key]
 
-                for bucket_key in bucket_keys:
-                    metrics = bucket_map[bucket_key]
-                    metrics["events"] += 1
-                    if outcome == "raise":
-                        metrics["raise_events"] += 1
-                    elif outcome == "call":
-                        metrics["call_events"] += 1
-                    else:
-                        metrics["fold_events"] += 1
-                    metrics["ratio_sum"] += ratio_value
-                    metrics["total_added_turn_bb"] += total_turn_bb
-                    metrics["total_added_all_bb"] += total_all_bb
-                    metrics["share_all_sum"] += share_all
-                    metrics["breakeven_sum"] += breakeven_pct
+                    for bucket_key in bucket_keys:
+                        metrics = bucket_map[bucket_key]
+                        metrics["events"] += 1
+                        if outcome == "raise":
+                            metrics["raise_events"] += 1
+                        elif outcome == "call":
+                            metrics["call_events"] += 1
+                        else:
+                            metrics["fold_events"] += 1
+                        metrics["ratio_sum"] += ratio_value
+                        metrics["total_added_turn_bb"] += total_turn_bb
+                        metrics["total_added_all_bb"] += total_all_bb
+                        metrics["share_all_sum"] += share_all
+                        metrics["breakeven_sum"] += breakeven_pct
 
     scenarios: List[dict] = []
-    for (hero_position, bet_line, position, player_count, texture_key, preflop_key), bucket_map in sorted(
+    for (
+        hero_position,
+        bet_line,
+        position,
+        player_count,
+        texture_key,
+        preflop_key,
+        spr_bucket,
+    ), bucket_map in sorted(
         aggregate.items(),
         key=lambda item: (
             HERO_POSITION_RANK.get(item[0][0], len(HERO_POSITION_RANK)),
@@ -217,6 +250,7 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
             item[0][3],
             TEXTURE_ORDER.get(item[0][4], len(TEXTURE_ORDER)),
             PREFLOP_ORDER.get(item[0][5], len(PREFLOP_ORDER)),
+            SPR_BUCKET_ORDER.get(item[0][6], len(SPR_BUCKET_ORDER)),
         ),
     ):
         scenarios.append(
@@ -227,6 +261,7 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
                 "player_count": player_count,
                 "texture_key": texture_key,
                 "preflop_key": preflop_key,
+                "spr_bucket": spr_bucket,
                 "metrics": [
                     {
                         "bucket_key": meta.key,
@@ -271,7 +306,14 @@ def _aggregate_events(events: Iterable[Mapping[str, object]]) -> Tuple[List[dict
         key=lambda value: HERO_POSITION_RANK.get(value, len(HERO_POSITION_RANK)),
     )
 
-    return scenarios, sorted(player_counts), hero_positions_sorted, texture_keys_seen, preflop_keys_seen
+    return (
+        scenarios,
+        sorted(player_counts),
+        hero_positions_sorted,
+        texture_keys_seen,
+        preflop_keys_seen,
+        set(spr_buckets_seen),
+    )
 
 
 def _event_texture_keys(event: Mapping[str, object]) -> list[str]:
@@ -483,4 +525,4 @@ __all__ = [
     "load_turn_pot_contribution",
     "build_turn_pot_contribution_payload",
 ]
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2

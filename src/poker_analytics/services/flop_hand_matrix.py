@@ -61,6 +61,11 @@ TEXTURE_OPTIONS: Sequence[Mapping[str, str]] = [
 ]
 TEXTURE_ORDER = {option["key"]: index for index, option in enumerate(TEXTURE_OPTIONS)}
 
+SPR_ANY_KEY = "any"
+SPR_BUCKET_OPTIONS: Sequence[str] = ("<=1", "1-2", "2-4", "4-6", "6-10", "10+")
+SPR_BUCKET_ORDER = {SPR_ANY_KEY: 0, **{value: index + 1 for index, value in enumerate(SPR_BUCKET_OPTIONS)}}
+SPR_BUCKET_KEY_SET = set(SPR_BUCKET_OPTIONS)
+
 
 def load_flop_hand_matrix() -> dict:
     """Return aggregated hero hand distributions by flop bet sizing."""
@@ -100,6 +105,7 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
     player_counts: set[int] = set()
     texture_keys_seen: set[str] = set()
     preflop_keys_seen: set[str] = set()
+    spr_buckets_seen: set[str] = set()
 
     for event in events:
         primary = event.get("hand_primary")
@@ -130,20 +136,38 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
         preflop_keys_seen.add(preflop_bucket_key)
         preflop_keys_for_event = preflop_keys(event.get("preflop_aggression_level"))
 
+        spr_bucket_raw = event.get("spr_bucket")
+        spr_bucket_value = str(spr_bucket_raw).strip() if isinstance(spr_bucket_raw, str) else None
+        if spr_bucket_value and spr_bucket_value not in SPR_BUCKET_KEY_SET:
+            spr_bucket_value = None
+        spr_bucket_keys = [SPR_ANY_KEY]
+        if spr_bucket_value:
+            spr_bucket_keys.append(spr_bucket_value)
+            spr_buckets_seen.add(spr_bucket_value)
+
         for texture_key in texture_keys_for_event:
             for preflop_key in preflop_keys_for_event:
-                scenario_key = (hero_position, bet_type, in_position, player_count, texture_key, preflop_key)
-                bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
-                for bucket_key in bucket_keys:
-                    stats = bucket_map.get(bucket_key)
-                    if stats is None:
-                        continue
-                    stats["events"] += 1
-                    stats["categories"][primary] += 1
-                    if bool(event.get("has_flush_draw")):
-                        stats["categories"]["Flush Draw"] += 1
-                    if bool(event.get("has_oesd_dg")):
-                        stats["categories"]["OESD/DG"] += 1
+                for spr_bucket_key in spr_bucket_keys:
+                    scenario_key = (
+                        hero_position,
+                        bet_type,
+                        in_position,
+                        player_count,
+                        texture_key,
+                        preflop_key,
+                        spr_bucket_key,
+                    )
+                    bucket_map = scenario_map.setdefault(scenario_key, _initial_bucket_map())
+                    for bucket_key in bucket_keys:
+                        stats = bucket_map.get(bucket_key)
+                        if stats is None:
+                            continue
+                        stats["events"] += 1
+                        stats["categories"][primary] += 1
+                        if bool(event.get("has_flush_draw")):
+                            stats["categories"]["Flush Draw"] += 1
+                        if bool(event.get("has_oesd_dg")):
+                            stats["categories"]["OESD/DG"] += 1
 
         hero_positions.add(hero_position)
         if bet_type:
@@ -152,7 +176,15 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
         player_counts.add(player_count)
 
     scenario_payload: List[dict] = []
-    for (hero_position, bet_type, in_position, player_count, texture_key, preflop_key), bucket_map in sorted(
+    for (
+        hero_position,
+        bet_type,
+        in_position,
+        player_count,
+        texture_key,
+        preflop_key,
+        spr_bucket,
+    ), bucket_map in sorted(
         scenario_map.items(),
         key=lambda item: (
             _hero_position_rank(item[0][0]),
@@ -161,6 +193,7 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
             item[0][3],
             TEXTURE_ORDER.get(item[0][4], len(TEXTURE_ORDER)),
             PREFLOP_ORDER.get(item[0][5], len(PREFLOP_ORDER)),
+            SPR_BUCKET_ORDER.get(item[0][6], len(SPR_BUCKET_ORDER)),
         ),
     ):
         metrics = []
@@ -182,6 +215,7 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
                 "player_count": player_count,
                 "texture_key": texture_key,
                 "preflop_key": preflop_key,
+                "spr_bucket": spr_bucket,
                 "metrics": metrics,
             }
         )
@@ -238,6 +272,11 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
             for option in PREFLOP_OPTIONS
             if option["key"] == PREFLOP_ANY_KEY or option["key"] in preflop_keys_seen
         ],
+        "spr_buckets": [
+            {"key": value, "label": value}
+            for value in SPR_BUCKET_OPTIONS
+            if value in spr_buckets_seen
+        ],
         "scenarios": scenario_payload,
     }
 
@@ -278,4 +317,4 @@ def _hero_position_rank(label: str) -> int:
 
 
 __all__ = ["load_flop_hand_matrix"]
-CURRENT_VERSION = 5
+CURRENT_VERSION = 6

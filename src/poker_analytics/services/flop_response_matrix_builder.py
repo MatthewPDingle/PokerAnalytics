@@ -99,15 +99,17 @@ def _effective_stack_bucket(value_bb: float) -> str:
 def _spr_bucket(value: Optional[float]) -> Optional[str]:
     if value is None:
         return None
-    if value < 1:
-        return "0-1"
+    if value <= 1:
+        return "<=1"
     if value < 2:
         return "1-2"
-    if value < 3:
-        return "2-3"
     if value < 4:
-        return "3-4"
-    return "4+"
+        return "2-4"
+    if value < 6:
+        return "4-6"
+    if value < 10:
+        return "6-10"
+    return "10+"
 
 
 @dataclass(frozen=True)
@@ -206,6 +208,7 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
     hero_hole_cards_text = " ".join(card for _, _, card in hero_hole_cards) if hero_hole_cards else None
     flop_cards = _extract_flop_cards(root)
     flop_cards_text = " ".join(card for _, _, card in flop_cards) if flop_cards else None
+    player_stacks: Dict[str, float] = {player.name: player.balance for player in players}
 
     player_contrib: Dict[str, float] = defaultdict(float)
     total_pot = 0.0
@@ -327,6 +330,24 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
                                 player_hole_cards,
                                 flop_cards,
                             )
+                            snapshot_before = set(flop_active_snapshot or active_players)
+                            player_stack_before = max(player_stacks.get(player, 0.0), 0.0)
+                            opponent_stacks = [
+                                max(player_stacks.get(name, 0.0), 0.0)
+                                for name in snapshot_before
+                                if name != player
+                            ]
+                            effective_stack = player_stack_before
+                            if opponent_stacks:
+                                effective_stack = min(effective_stack, min(opponent_stacks))
+                            effective_stack_bb = (effective_stack / big_blind) if big_blind else 0.0
+                            pot_before_bb_value = (pot_before / big_blind) if big_blind else None
+                            spr_value = (
+                                (effective_stack_bb / pot_before_bb_value)
+                                if pot_before_bb_value is not None and pot_before_bb_value > 0
+                                else None
+                            )
+                            spr_bucket = _spr_bucket(spr_value)
                             event_record = {
                                 "hero_position": bettor_position,
                                 "bettor": player,
@@ -347,7 +368,7 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
                                 ),
                                 "hero_hole_cards": hero_hole_cards_text if is_hero_event else None,
                                 "flop_cards": flop_cards_text,
-                                "pot_before_bb": (pot_before / big_blind) if big_blind else None,
+                                "pot_before_bb": pot_before_bb_value,
                                 "total_added_flop": total_added,
                                 "total_added_flop_bb": total_added_bb,
                                 "total_added_all": total_added,
@@ -355,6 +376,9 @@ def _events_from_hand_history(hand_history: str, stake_policy: StakePolicy) -> l
                                 "responses": responses,
                                 "preflop_aggression_level": preflop_raise_count,
                                 "preflop_bucket_key": preflop_buckets.get(player),
+                                "effective_stack_bb": effective_stack_bb,
+                                "spr": spr_value,
+                                "spr_bucket": spr_bucket,
                             }
                             events.append(event_record)
                             current_event = event_record
@@ -1301,6 +1325,24 @@ def _turn_events_from_hand_history(
                         if not bucket_keys:
                             continue
 
+                        opponent_stacks = [
+                            max(player_stacks.get(name, 0.0), 0.0)
+                            for name in snapshot_before
+                            if name != player
+                        ]
+                        if opponent_stacks:
+                            effective_stack = min([player_stack_after, *opponent_stacks])
+                        else:
+                            effective_stack = player_stack_after
+                        effective_stack_bb = (effective_stack / big_blind) if big_blind else 0.0
+                        pot_before_bb_value = (pot_before / big_blind) if big_blind else None
+                        spr_value = (
+                            (effective_stack_bb / pot_before_bb_value)
+                            if pot_before_bb_value is not None and pot_before_bb_value > 0
+                            else None
+                        )
+                        spr_bucket = _spr_bucket(spr_value)
+
                         outcome = _villain_outcome(actions[idx + 1 :], player)
                         responses = _collect_turn_responses(actions[idx + 1 :], player, player_hole_cards, turn_cards)
                         classification = player_turn_classifications.get(player)
@@ -1332,7 +1374,10 @@ def _turn_events_from_hand_history(
                             "flop_texture_keys": flop_texture_list,
                             "turn_cards": turn_cards_text,
                             "turn_texture_keys": turn_texture_list,
-                            "pot_before_bb": (pot_before / big_blind) if big_blind else 0.0,
+                            "pot_before_bb": pot_before_bb_value,
+                            "effective_stack_bb": effective_stack_bb,
+                            "spr": spr_value,
+                            "spr_bucket": spr_bucket,
                             "total_added_turn": total_added_turn,
                             "total_added_turn_bb": total_added_turn_bb,
                             "total_added_all": total_added_turn,
@@ -1606,6 +1651,24 @@ def _river_events_from_hand_history(
                     if not bucket_keys:
                         continue
 
+                    opponent_stacks = [
+                        max(player_stacks.get(name, 0.0), 0.0)
+                        for name in snapshot_before
+                        if name != player
+                    ]
+                    if opponent_stacks:
+                        effective_stack = min([player_stack_after, *opponent_stacks])
+                    else:
+                        effective_stack = player_stack_after
+                    effective_stack_bb = (effective_stack / big_blind) if big_blind else 0.0
+                    pot_before_bb_value = (pot_before / big_blind) if big_blind else None
+                    spr_value = (
+                        (effective_stack_bb / pot_before_bb_value)
+                        if pot_before_bb_value is not None and pot_before_bb_value > 0
+                        else None
+                    )
+                    spr_bucket = _spr_bucket(spr_value)
+
                     outcome = _villain_outcome(actions[idx + 1 :], player)
                     responses = _collect_river_responses(actions[idx + 1 :], player, player_hole_cards, river_cards)
                     classification = player_river_classifications.get(player)
@@ -1639,7 +1702,10 @@ def _river_events_from_hand_history(
                         "turn_texture_keys": turn_texture_list,
                         "river_cards": river_cards_text,
                         "river_texture_keys": river_texture_list,
-                        "pot_before_bb": (pot_before / big_blind) if big_blind else 0.0,
+                        "pot_before_bb": pot_before_bb_value,
+                        "effective_stack_bb": effective_stack_bb,
+                        "spr": spr_value,
+                        "spr_bucket": spr_bucket,
                         "total_added_river": total_added_river,
                         "total_added_river_bb": total_added_river_bb,
                         "total_added_all": total_added_river,
