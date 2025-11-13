@@ -1,8 +1,8 @@
-# Environment
+# Environment (local virtualenv, bytecode)
 .venv/
 __pycache__/
 
-# Local data caches
+# Local data caches and databases
 var/
 drivehud/
 
