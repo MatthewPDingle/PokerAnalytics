@@ -15,6 +15,13 @@ export type ActionRecommendationRow = {
   sampleSize: number;
   foldSurplus: number | null;
   potShareAdded: number | null;
+  // Parsed breakdown for table display
+  bucketLabel: string;
+  foldPct: number | null;
+  callPct: number | null;
+  raisePct: number | null;
+  breakevenFoldPct: number | null;
+  avgBetPct: number | null;
 };
 
 type RawRow = {
@@ -28,6 +35,7 @@ type RawRow = {
   situation: 'Bluff' | 'Value';
   action: string;
   rank: number;
+  avg_bet_pct?: number;
 };
 
 type RawPayload = {
@@ -68,11 +76,74 @@ const parsePotShareAdded = (text: string): number | null => {
   return Number.isFinite(value) ? value : null;
 };
 
+const parseBucketLabel = (text: string): string => {
+  const match = text.match(/^Bet (.+?) —/);
+  if (!match) {
+    return '';
+  }
+  return match[1];
+};
+
+const parseFoldCallRaise = (
+  text: string,
+): { foldPct: number | null; callPct: number | null; raisePct: number | null } => {
+  const foldMatch = text.match(/folds ([0-9.]+)%/);
+  const callMatch = text.match(/calls ([0-9.]+)%/);
+  const raiseMatch = text.match(/raises ([0-9.]+)%/);
+
+  const call = callMatch ? Number.parseFloat(callMatch[1]) : null;
+  const raise = raiseMatch ? Number.parseFloat(raiseMatch[1]) : null;
+  let fold = foldMatch ? Number.parseFloat(foldMatch[1]) : null;
+
+  if (!Number.isFinite(call ?? NaN) || !Number.isFinite(raise ?? NaN)) {
+    return {
+      foldPct: Number.isFinite(fold ?? NaN) ? (fold as number) : null,
+      callPct: Number.isFinite(call ?? NaN) ? (call as number) : null,
+      raisePct: Number.isFinite(raise ?? NaN) ? (raise as number) : null,
+    };
+  }
+
+  if (!Number.isFinite(fold ?? NaN)) {
+    const total = (call as number) + (raise as number);
+    if (Number.isFinite(total) && total <= 100) {
+      fold = Math.max(0, 100 - total);
+    } else {
+      fold = null;
+    }
+  }
+
+  return {
+    foldPct: Number.isFinite(fold ?? NaN) ? (fold as number) : null,
+    callPct: Number.isFinite(call ?? NaN) ? (call as number) : null,
+    raisePct: Number.isFinite(raise ?? NaN) ? (raise as number) : null,
+  };
+};
+
+const parseBreakevenFoldPct = (
+  text: string,
+  foldPct: number | null,
+  foldSurplus: number | null,
+): number | null => {
+  const match = text.match(/vs ([0-9.]+)% breakeven/);
+  if (match) {
+    const value = Number.parseFloat(match[1]);
+    return Number.isFinite(value) ? value : null;
+  }
+  if (foldPct != null && foldSurplus != null) {
+    const value = foldPct - foldSurplus;
+    return Number.isFinite(value) ? value : null;
+  }
+  return null;
+};
+
 const transformPayload = (payload: RawPayload): HookState => {
   const rows: ActionRecommendationRow[] = payload.rows.map((row) => {
     const sampleSize = parseSampleSize(row.action);
     const foldSurplus = parseFoldSurplus(row.action);
     const potShareAdded = parsePotShareAdded(row.action);
+    const bucketLabel = parseBucketLabel(row.action);
+    const { foldPct, callPct, raisePct } = parseFoldCallRaise(row.action);
+    const breakevenFoldPct = parseBreakevenFoldPct(row.action, foldPct, foldSurplus);
 
     return {
       street: row.street,
@@ -88,6 +159,15 @@ const transformPayload = (payload: RawPayload): HookState => {
       sampleSize,
       foldSurplus,
       potShareAdded,
+      bucketLabel,
+      foldPct,
+      callPct,
+      raisePct,
+      breakevenFoldPct,
+      avgBetPct:
+        typeof row.avg_bet_pct === 'number' && Number.isFinite(row.avg_bet_pct)
+          ? row.avg_bet_pct
+          : null,
     };
   });
 

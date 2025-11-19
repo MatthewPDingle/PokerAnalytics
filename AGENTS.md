@@ -226,5 +226,16 @@ Stored in `src/poker_analytics/data/bet_sizing.py`. Always normalize bet sizes b
   - River: `PYTHONPATH=src python scripts/build_pokerstars_river_hand_matrix.py`
 - Refresh DriveHUD responder hand-matrix caches (flop/turn/river):
   - `PYTHONPATH=src python scripts/refresh_responder_caches.py`
+- Rebuild Action Quick Reference recommendations (per data source):
+  - DriveHUD / Ignition (`drivehud`):
+    - `python scripts/build_action_recommendations.py --source drivehud`
+  - PokerStars NL10 (`pokerstars_nl10`):
+    - `python scripts/build_action_recommendations.py --source pokerstars_nl10`
+  - Behaviour:
+    - Reads existing flop/turn/river response-matrix caches for the given source.
+    - For every combination of filters with sufficient data, selects up to **two** bet-size buckets per street:
+      - **Bluff** rows: buckets with `events ≥ 50` and fold surplus `≥ 5pp`, ranked by fold surplus.
+      - **Value** rows: buckets with `events ≥ 50`, ranked by average pot share added (`avg_share_all`).
+    - Encodes bet size, fold surplus, sample size, and fold/call/raise percentages into the `action` text string used by the Action Quick Reference page.
 
 Keep this document updated as architecture solidifies. Treat it as the root source of truth for future agent reactivation.

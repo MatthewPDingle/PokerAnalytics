@@ -26,7 +26,7 @@ type Street = 'Flop' | 'Turn' | 'River';
 type Situation = 'Bluff' | 'Value';
 
 const streetOptions: Street[] = ['Flop', 'Turn', 'River'];
-const situationOptions: Situation[] = ['Value', 'Bluff'];
+const situationOptions: Situation[] = ['Bluff', 'Value'];
 
 type FilterState = {
   street: Street;
@@ -45,24 +45,24 @@ const ActionQuickReference = () => {
 
   const [filters, setFilters] = useState<FilterState>({
     street: 'Flop',
-    preflopAction: null,
-    betClassification: null,
-    flopTexture: null,
-    players: null,
-    bettorPosition: null,
-    sprBucket: null,
+    preflopAction: 'All Preflop Pots',
+    betClassification: 'All Bet Types',
+    flopTexture: 'All Textures',
+    players: 'Any',
+    bettorPosition: 'Any',
+    sprBucket: 'All SPRs',
     situation: 'Bluff',
   });
 
   const resetFilters = () => {
     setFilters({
       street: 'Flop',
-      preflopAction: null,
-      betClassification: null,
-      flopTexture: null,
-      players: null,
-      bettorPosition: null,
-      sprBucket: null,
+      preflopAction: 'All Preflop Pots',
+      betClassification: 'All Bet Types',
+      flopTexture: 'All Textures',
+      players: 'Any',
+      bettorPosition: 'Any',
+      sprBucket: 'All SPRs',
       situation: 'Bluff',
     });
   };
@@ -126,22 +126,52 @@ const ActionQuickReference = () => {
       if (isAllA && !isAllB) return -1;
       if (!isAllA && isAllB) return 1;
 
-      const group = (label: string) => {
-        const lower = label.toLowerCase();
-        if (lower.startsWith('flop -')) return 0;
-        if (lower.startsWith('turn -')) return 1;
-        if (lower.startsWith('river -')) return 2;
+      const groupFor = (label: string): number => {
+        const streets = textureStreetMap.get(label);
+        if (streets?.has('Flop')) return 0;
+        if (streets?.has('Turn')) return 1;
+        if (streets?.has('River')) return 2;
         return 3;
       };
-      const gA = group(a);
-      const gB = group(b);
+
+      const gA = groupFor(a);
+      const gB = groupFor(b);
       if (gA !== gB) return gA - gB;
+      return a.localeCompare(b);
+    });
+
+    const betClassificationsOrdered = Array.from(betClassificationsSet).filter((value) => {
+      const lower = value.toLowerCase();
+      return lower !== 'all bet types';
+    });
+    betClassificationsOrdered.sort((a, b) => {
+      if (a === b) return 0;
+
+      const lowerA = a.toLowerCase();
+      const lowerB = b.toLowerCase();
+      const aIsAll = lowerA.startsWith('all ') || lowerA === 'any';
+      const bIsAll = lowerB.startsWith('all ') || lowerB === 'any';
+      if (aIsAll && !bIsAll) return -1;
+      if (!aIsAll && bIsAll) return 1;
+
+      const streetGroup = (label: string): number => {
+        const streets = betClassStreetMap.get(label);
+        if (streets?.has('Flop')) return 0;
+        if (streets?.has('Turn')) return 1;
+        if (streets?.has('River')) return 2;
+        return 3;
+      };
+
+      const gA = streetGroup(a);
+      const gB = streetGroup(b);
+      if (gA !== gB) return gA - gB;
+
       return a.localeCompare(b);
     });
 
     return {
       preflopActions: sortWithAllFirst(Array.from(preflopActionsSet)),
-      betClassifications: sortWithAllFirst(Array.from(betClassificationsSet)),
+      betClassifications: betClassificationsOrdered,
       textures: texturesOrdered,
       players: sortWithAllFirst(Array.from(playersSet)),
       positions: sortWithAllFirst(Array.from(positionsSet)),
@@ -279,9 +309,22 @@ const ActionQuickReference = () => {
     return a.localeCompare(b);
   });
 
-  const texturesForStreet = textures.filter((value) =>
-    textureStreetHasDataMap.get(value)?.has(filters.street),
-  );
+  const texturesForStreet = textures;
+
+  const formatPercent = (value: number | null) => {
+    if (value == null) return '–';
+    return `${value.toFixed(1)}%`;
+  };
+
+  const formatFoldSurplus = (value: number | null) => {
+    if (value == null) return '–';
+    return `${value.toFixed(1)}%`;
+  };
+
+  const formatPotShare = (value: number | null) => {
+    if (value == null) return '–';
+    return `${value.toFixed(2)}×`;
+  };
 
   return (
     <Stack spacing={8} py={{ base: 6, md: 10 }} px={{ base: 4, md: 8 }} maxW="1500px" mx="auto">
@@ -321,8 +364,8 @@ const ActionQuickReference = () => {
                       setFilters((prev) => ({
                         ...prev,
                         street,
-                        betClassification: null,
-                        flopTexture: null,
+                        // Keep current filters but ensure we stay on the "all" texture bucket
+                        flopTexture: 'All Textures',
                       }))
                     }
                     colorScheme={filters.street === street ? 'brand' : undefined}
@@ -342,12 +385,12 @@ const ActionQuickReference = () => {
                 <WrapItem>
                   <Button
                     size="sm"
-                    variant={filters.betClassification === null ? 'solid' : 'outline'}
-                    colorScheme={filters.betClassification === null ? 'brand' : undefined}
+                    variant={filters.betClassification === 'All Bet Types' ? 'solid' : 'outline'}
+                    colorScheme={filters.betClassification === 'All Bet Types' ? 'brand' : undefined}
                     onClick={() =>
                       setFilters((prev) => ({
                         ...prev,
-                        betClassification: null,
+                        betClassification: 'All Bet Types',
                       }))
                     }
                   >
@@ -367,7 +410,8 @@ const ActionQuickReference = () => {
                       onClick={() =>
                         setFilters((prev) => ({
                           ...prev,
-                          betClassification: prev.betClassification === value ? null : value,
+                          betClassification:
+                            prev.betClassification === value ? 'All Bet Types' : value,
                         }))
                       }
                     >
@@ -460,27 +504,31 @@ const ActionQuickReference = () => {
                 Board Texture
               </Text>
               <Wrap>
-                {texturesForStreet.map((value) => (
-                  <WrapItem key={value}>
-                    <Button
-                      size="sm"
-                      variant={filters.flopTexture === value ? 'solid' : 'outline'}
-                      colorScheme={filters.flopTexture === value ? 'brand' : undefined}
-                      isDisabled={
-                        !textureStreetMap.get(value)?.has(filters.street) &&
-                        filters.flopTexture !== value
-                      }
-                      onClick={() =>
-                        setFilters((prev) => ({
-                          ...prev,
-                          flopTexture: prev.flopTexture === value ? null : value,
-                        }))
-                      }
-                    >
-                      {value}
-                    </Button>
-                  </WrapItem>
-                ))}
+                {texturesForStreet.map((value) => {
+                  const isAllTextures = value === 'All Textures';
+                  const hasStreetData = textureStreetMap.get(value)?.has(filters.street) ?? false;
+                  const isPrimaryForStreet = isAllTextures || hasStreetData;
+                  const isSelected = filters.flopTexture === value;
+
+                  return (
+                    <WrapItem key={value}>
+                      <Button
+                        size="sm"
+                        variant={isSelected ? 'solid' : 'outline'}
+                        colorScheme={isSelected ? 'brand' : undefined}
+                        opacity={isPrimaryForStreet ? 1 : 0.4}
+                        onClick={() =>
+                          setFilters((prev) => ({
+                            ...prev,
+                            flopTexture: prev.flopTexture === value ? null : value,
+                          }))
+                        }
+                      >
+                        {value}
+                      </Button>
+                    </WrapItem>
+                  );
+                })}
               </Wrap>
             </Stack>
 
@@ -535,80 +583,57 @@ const ActionQuickReference = () => {
         </Flex>
       </Stack>
 
-      <Stack spacing={4}>
-        <Flex justify="space-between" align="center">
-          <Heading size="md">Recommended Action</Heading>
+      <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" bg="blackAlpha.400" p={4}>
+        <Flex justify="space-between" align="center" mb={3}>
+          <Heading size="md">Recommended Actions</Heading>
           <Text fontSize="sm" color="whiteAlpha.700">
             {filteredRows.length === 1 ? '1 match' : `${filteredRows.length} matches`}
           </Text>
         </Flex>
-
-        <Stack spacing={2}>
-          {filteredRows.map((row, index) => (
-            <Box
-              key={`${row.street}-${row.preflopAction}-${row.betClassification}-${row.flopTexture}-${row.players}-${row.bettorPosition}-${row.sprBucket}-${row.situation}-${index}`}
-              bg="blackAlpha.500"
-              borderRadius="md"
-              p={3}
-              borderWidth="1px"
-              borderColor="whiteAlpha.200"
-            >
-              <Text fontSize="lg" fontWeight="semibold" color="brand.200">
-                {row.action}
-              </Text>
-              <Flex gap={3} mt={1} wrap="wrap" fontSize="xs" color="whiteAlpha.700">
-                <Badge>{row.street}</Badge>
-                <Badge>{row.preflopAction}</Badge>
-                <Badge>{row.betClassification}</Badge>
-                <Badge>{row.flopTexture}</Badge>
-                <Badge>{row.players === 'Any' ? 'Any Players' : `${row.players} Players`}</Badge>
-                <Badge>{row.bettorPosition}</Badge>
-                <Badge>{row.sprBucket}</Badge>
-                <Badge>{row.situation}</Badge>
-              </Flex>
-            </Box>
-          ))}
-          {filteredRows.length === 0 && (
-            <Text color="whiteAlpha.700" fontStyle="italic">
-              No recommendations match the current filters.
-            </Text>
-          )}
-        </Stack>
-      </Stack>
-
-      <Box borderWidth="1px" borderColor="whiteAlpha.200" borderRadius="lg" bg="blackAlpha.400" p={4}>
-        <Heading size="md" mb={3}>
-          Matching Rows
-        </Heading>
         <Box overflowX="auto">
           <Table size="sm" variant="simple">
             <Thead>
               <Tr>
-                <Th>Street</Th>
-                <Th>Preflop Pot</Th>
-                <Th>Bet Type</Th>
-                <Th>Texture</Th>
-                <Th>Players</Th>
-                <Th>Position</Th>
-                <Th>SPR</Th>
-                <Th>Situation</Th>
                 <Th>Action</Th>
+                <Th isNumeric>Fold Surplus</Th>
+                <Th isNumeric># Events</Th>
+                <Th isNumeric>Fold %</Th>
+                <Th isNumeric>Call %</Th>
+                <Th isNumeric>Raise %</Th>
+                <Th isNumeric>Avg Bet Size</Th>
+                <Th isNumeric>Breakeven Fold %</Th>
+                <Th isNumeric>Avg Pot Share Added</Th>
               </Tr>
             </Thead>
             <Tbody>
               {filteredRows.map((row, index) => (
                 <Tr key={`${row.street}-${index}`}>
-                  <Td>{row.street}</Td>
-                  <Td>{row.preflopAction}</Td>
-                  <Td>{row.betClassification}</Td>
-                  <Td>{row.flopTexture}</Td>
-                  <Td>{row.players}</Td>
-                  <Td>{row.bettorPosition}</Td>
-                  <Td>{row.sprBucket}</Td>
-                  <Td>{row.situation}</Td>
-                  <Td>{row.action}</Td>
+                  <Td>
+                    <Text fontSize="lg" fontWeight="semibold" color="brand.200">
+                      {row.bucketLabel ? `Bet ${row.bucketLabel}` : row.action.split(' — ')[0]}
+                    </Text>
+                  </Td>
+                  <Td isNumeric>{formatFoldSurplus(row.foldSurplus)}</Td>
+                  <Td isNumeric>{row.sampleSize.toLocaleString()}</Td>
+                  <Td isNumeric>{formatPercent(row.foldPct)}</Td>
+                  <Td isNumeric>{formatPercent(row.callPct)}</Td>
+                  <Td isNumeric>{formatPercent(row.raisePct)}</Td>
+                  <Td isNumeric>
+                    {row.avgBetPct != null ? `${row.avgBetPct.toFixed(1)}%` : row.bucketLabel || '–'}
+                  </Td>
+                  <Td isNumeric>{formatPercent(row.breakevenFoldPct)}</Td>
+                  <Td isNumeric>{formatPotShare(row.potShareAdded)}</Td>
                 </Tr>
               ))}
+              {filteredRows.length === 0 && (
+                <Tr>
+                  <Td colSpan={9}>
+                    <Text color="whiteAlpha.700" fontStyle="italic">
+                      No recommendations match the current filters.
+                    </Text>
+                  </Td>
+                </Tr>
+              )}
             </Tbody>
           </Table>
         </Box>
