@@ -148,4 +148,83 @@ Stored in `src/poker_analytics/data/bet_sizing.py`. Always normalize bet sizes b
 3. Decide on caching strategy for large extracts (Redis? On-disk?).
 4. Determine additional canonical groupings (turn textures, river runouts, stack-depth buckets).
 
+## Agent Interaction & Session Notes
+
+### Communication Preferences
+- Favour concise updates when describing changes; avoid unnecessary detail.
+- Always call out any follow-up actions required from the user (e.g., scripts to run, services to restart) using explicit commands.
+
+### Data Source & Cache Decisions
+- Global Data Source is selected via the NavBar dropdown (upper-right). Key values:
+  - `drivehud` → Ignition / DriveHUD (canonical, hero + population).
+  - `pokerstars_nl10` → PokerStars NL10 population dataset (no hero).
+- Backend normalises `source=drivehud` to the default `None` internally so legacy DriveHUD loaders continue to hit the database and root caches (e.g., `var/cache/flop_response_matrix_<stake>.json`).
+- Non-DriveHUD sources (e.g., `pokerstars_nl10`) never touch the DB; they rely entirely on precomputed per-source caches under `var/cache/<source>/`.
+- Performance pages (`/performance/overview`, `/performance/opponent-count`) are always DriveHUD-only and ignore the global Data Source selector.
+
+### Preflop Shove Equity (Equity / EV Grids)
+- Canonical equity tables live at:
+  - DriveHUD: `var/cache/preflop_equity.json` (legacy seed from `analysis/cache/preflop_equity.json` on first run).
+  - Per source: `var/cache/<source>/preflop_equity.json`.
+- Equity/EV API:
+  - Ignition: `/api/preflop/shove/equity` → `get_equity_payload(source=None)`.
+  - PokerStars NL10: `/api/preflop/shove/equity?source=pokerstars_nl10` → `get_equity_payload(source='pokerstars_nl10')`.
+- Equity simulation script (Monte Carlo) lives in `scripts/preflop_equity.py` and supports both DB-backed and JSON-backed runs:
+  - From a DriveHUD SQLite DB (default):
+    - `python scripts/preflop_equity.py --database drivehud/drivehud.db --trials 10000 --workers 16 --output var/cache/preflop_equity.json`
+  - From precomputed shove events JSON (used for PokerStars NL10):
+    - `python scripts/preflop_equity.py --events-json var/cache/pokerstars_nl10/preflop_shove_events_bb_0p1.json --trials 10000 --workers 16 --output var/cache/pokerstars_nl10/preflop_equity.json`
+- When adding a new source, follow the PokerStars pattern: materialise `preflop_shove_events_<stake>.json` under `var/cache/<source>/`, then run `scripts/preflop_equity.py` with `--events-json` to generate `preflop_equity.json` for that source.
+
+### Flop / Turn / River Response Matrices & Hand Breakdowns
+- Default (Ignition / DriveHUD) caches live at `var/cache/`:
+  - Flop: `flop_response_matrix_<stake>.json`, `flop_pot_contribution_<stake>.json`, `flop_hand_matrix_<stake>.json`, `flop_responder_hand_matrix_<stake>.json`.
+  - Turn: `turn_response_matrix_<stake>.json`, `turn_pot_contribution_<stake>.json`, `turn_hand_matrix_<stake>.json`, `turn_responder_hand_matrix_<stake>.json`.
+  - River: `river_response_matrix_<stake>.json`, `river_pot_contribution_<stake>.json`, `river_hand_matrix_<stake>.json`, `river_responder_hand_matrix_<stake>.json`.
+- Per-source caches follow the same naming but live under `var/cache/<source>/`.
+- DriveHUD (`source=None`):
+  - Response matrices and hand breakdowns are built from the DriveHUD DB if the root caches are missing.
+  - Bettor’s and Responder’s Hand Breakdown tables on the Flop/Turn/River Response Matrix pages are populated from the DriveHUD hero/responder hand matrix caches.
+  - For DriveHUD, hero actions are excluded from population aggregates:
+    - Hero as bettor is excluded at event-build time; bet events are always non-hero bettors.
+    - Hero as responder to others’ bets is filtered out in `_collect_flop_responses`, `_collect_turn_responses`, and `_collect_river_responses`, so hero responses do not contribute to Bet Responses or Responder Hand Breakdown tables.
+- Non-DriveHUD sources (e.g., PokerStars):
+  - Response matrices and responder hand breakdowns use per-source JSON caches under `var/cache/<source>/`.
+  - Flop Bettor’s Hand Breakdown for PokerStars NL10:
+    - Built from raw PokerStars HH text files under `data/NL10` via `scripts/build_pokerstars_flop_hand_matrix.py`.
+    - Uses only hands where the bettor’s hole cards are revealed at showdown; hands with no shown cards are excluded from the bettor hand-mix tables.
+    - Command to (re)build:
+      - `PYTHONPATH=src python scripts/build_pokerstars_flop_hand_matrix.py`
+    - Output cache: `var/cache/pokerstars_nl10/flop_hand_matrix_<stake_token>.json` (e.g., `flop_hand_matrix_bb_0p1.json`).
+  - Turn Bettor’s Hand Breakdown for PokerStars NL10:
+    - Built from the same `data/NL10` PokerStars HH files via `scripts/build_pokerstars_turn_hand_matrix.py`.
+    - Parser focuses on the **first turn bet per hand** where the bettor’s hole cards are shown at showdown.
+    - Bet-size buckets are derived from bet-to-pot ratio at the start of the turn; SPR buckets are currently treated as “any” for PokerStars.
+    - Turn betting line classification is not inferred for PokerStars; events participate in the “Any betting line” aggregates but will not match specific line filters.
+    - Command to (re)build:
+      - `PYTHONPATH=src python scripts/build_pokerstars_turn_hand_matrix.py`
+    - Output cache: `var/cache/pokerstars_nl10/turn_hand_matrix_<stake_token>.json` (e.g., `turn_hand_matrix_bb_0p1.json`).
+  - River Bettor’s Hand Breakdown for PokerStars NL10:
+    - Built from the same `data/NL10` PokerStars HH files via `scripts/build_pokerstars_river_hand_matrix.py`.
+    - Parser focuses on the **first river bet per hand** where the bettor’s hole cards are shown at showdown.
+    - Bet-size buckets are derived from bet-to-pot ratio at the start of the river; SPR buckets are currently treated as “any” for PokerStars.
+    - River betting line classification is not inferred for PokerStars; events participate in “Any betting line” aggregates only.
+    - Command to (re)build:
+      - `PYTHONPATH=src python scripts/build_pokerstars_river_hand_matrix.py`
+    - Output cache: `var/cache/pokerstars_nl10/river_hand_matrix_<stake_token>.json` (e.g., `river_hand_matrix_bb_0p1.json`).
+
+### Scripts & Commands to Refresh Analytics
+- Refresh flop/turn/river response matrices and related caches from DriveHUD:
+  - `python scripts/refresh_flop_caches.py` (optional: `--max-hands N` to limit for smoke tests).
+- Build preflop response curves (DriveHUD):
+  - `python scripts/build_response_curves.py --max-hands N` (writes `var/cache/preflop_response_curves.json`).
+- Build flop response matrix only (DriveHUD):
+  - `python scripts/build_flop_response_matrix.py --max-hands N`.
+- Build PokerStars NL10 Bettor’s Hand Breakdown caches from raw HH text:
+  - Flop: `PYTHONPATH=src python scripts/build_pokerstars_flop_hand_matrix.py`
+  - Turn: `PYTHONPATH=src python scripts/build_pokerstars_turn_hand_matrix.py`
+  - River: `PYTHONPATH=src python scripts/build_pokerstars_river_hand_matrix.py`
+- Refresh DriveHUD responder hand-matrix caches (flop/turn/river):
+  - `PYTHONPATH=src python scripts/refresh_responder_caches.py`
+
 Keep this document updated as architecture solidifies. Treat it as the root source of truth for future agent reactivation.

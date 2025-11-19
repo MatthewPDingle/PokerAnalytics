@@ -153,14 +153,18 @@ const transform = (payload: RawPayload): HookState => {
   };
 };
 
-const useRiverPotContribution = (): HookState => {
+const useRiverPotContribution = (sourceKey: string | null): HookState => {
   const [state, setState] = useState<HookState>(INITIAL_STATE);
 
   useEffect(() => {
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/river/pot-contribution');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/river/pot-contribution?source=${encodeURIComponent(sourceKey)}`
+            : '/api/river/pot-contribution';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -200,7 +204,7 @@ const useRiverPotContribution = (): HookState => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

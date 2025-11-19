@@ -266,14 +266,25 @@ const transform = (payload: RawPayload): HandMatrixState => {
   };
 };
 
-export const useTurnHandMatrix = (): HandMatrixState => {
+export const useTurnHandMatrix = (sourceKey: string | null): HandMatrixState => {
   const [state, setState] = useState<HandMatrixState>(INITIAL_STATE);
 
   useEffect(() => {
     let cancelled = false;
+
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/turn/hand-types');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/turn/hand-types?source=${encodeURIComponent(sourceKey)}`
+            : '/api/turn/hand-types';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -316,7 +327,7 @@ export const useTurnHandMatrix = (): HandMatrixState => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

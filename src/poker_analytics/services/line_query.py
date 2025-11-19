@@ -79,6 +79,7 @@ def query_line(
     payload: Mapping[str, object],
     *,
     events: Optional[Iterable[Mapping[str, object]]] = None,
+    source: str | None = None,
 ) -> dict:
     """Aggregate responder and response metrics for a line descriptor."""
 
@@ -92,13 +93,20 @@ def query_line(
     stake_policy = StakePolicy.from_environment()
     descriptor_fingerprint_value = descriptor_fingerprint(descriptor)
     cache_fingerprint = _fingerprint_with_filters(descriptor_fingerprint_value, request_filters)
-    cache_path = _resolve_cache_path(cache_fingerprint, stake_policy)
+    cache_path = _resolve_cache_path(cache_fingerprint, stake_policy, source=source)
 
     cached = _read_cache(cache_path)
     if cached is not None:
         return cached
 
-    source_events = list(events) if events is not None else collect_line_events()
+    if events is not None:
+        source_events = list(events)
+    elif source is None:
+        source_events = collect_line_events()
+    else:
+        # For non-default sources we rely on precomputed caches; without events
+        # we fall back to an empty event set.
+        source_events = []
     filtered_events = [event for event in source_events if _matches_filters(event, filters)]
 
     payload_dict = _build_payload(
@@ -947,11 +955,15 @@ def _counter_to_distribution(counter: Counter) -> list[dict[str, object]]:
     ]
 
 
-def _resolve_cache_path(fingerprint: str, stake_policy: StakePolicy) -> Path:
+def _resolve_cache_path(fingerprint: str, stake_policy: StakePolicy, *, source: str | None = None) -> Path:
     data_paths = build_data_paths()
     data_paths.ensure_cache_dir()
+    base_dir = data_paths.cache_dir
+    if source:
+        base_dir = base_dir / source
+        base_dir.mkdir(parents=True, exist_ok=True)
     filename = f"line_query_{stake_policy.cache_token()}_{fingerprint}.json"
-    return data_paths.cache_dir / filename
+    return base_dir / filename
 
 
 def _read_cache(path: Path) -> Optional[dict]:

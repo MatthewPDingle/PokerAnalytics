@@ -370,8 +370,20 @@ def _filter_events(
     return filtered
 
 
-def get_shove_range_payload(events: Optional[List[ShoveEvent]] = None) -> List[dict]:
-    events = events or load_preflop_shove_events()
+def get_shove_range_payload(events: Optional[List[ShoveEvent]] = None, *, source: str | None = None) -> List[dict]:
+    if events is None:
+        if source is None:
+            events = load_preflop_shove_events()
+        else:
+            stake_policy = StakePolicy.from_environment()
+            cache_dir = build_data_paths().cache_dir
+            cache_path = cache_dir / source / f"preflop_shove_events_{stake_policy.cache_token()}.json"
+            if cache_path.exists():
+                with cache_path.open("r", encoding="utf-8") as fh:
+                    cached = json.load(fh)
+                events = [ShoveEvent(**event) for event in cached]
+            else:
+                events = []
     if not events:
         return []
 
@@ -419,15 +431,20 @@ def _grid_dict_to_matrix(grid: Dict[str, Dict[str, float]]) -> List[List[float]]
     return [[float(grid.get(row, {}).get(col, 0.0)) for col in RANKS] for row in RANKS]
 
 
-def get_equity_payload(cache_path: Optional[Path] = None) -> List[dict]:
+def get_equity_payload(cache_path: Optional[Path] = None, *, source: str | None = None) -> List[dict]:
     data_paths = build_data_paths()
-    cache_path = cache_path or data_paths.cache_dir / "preflop_equity.json"
-    if not cache_path.exists():
+    if cache_path is None:
+        if source:
+            cache_path = data_paths.cache_dir / source / "preflop_equity.json"
+        else:
+            cache_path = data_paths.cache_dir / "preflop_equity.json"
+    if source is None and not cache_path.exists():
         legacy_path = Path("analysis/cache/preflop_equity.json")
         if legacy_path.exists():
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(legacy_path.read_text(), encoding="utf-8")
     cache = _load_equity_cache(cache_path)
+
     if not cache:
         return []
 

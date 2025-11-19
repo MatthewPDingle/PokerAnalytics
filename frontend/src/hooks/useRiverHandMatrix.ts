@@ -266,14 +266,25 @@ const transform = (payload: RawPayload): HandMatrixState => {
   };
 };
 
-export const useRiverHandMatrix = (): HandMatrixState => {
+export const useRiverHandMatrix = (sourceKey: string | null): HandMatrixState => {
   const [state, setState] = useState<HandMatrixState>(INITIAL_STATE);
 
   useEffect(() => {
     let cancelled = false;
+
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/river/hand-types');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/river/hand-types?source=${encodeURIComponent(sourceKey)}`
+            : '/api/river/hand-types';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -316,7 +327,7 @@ export const useRiverHandMatrix = (): HandMatrixState => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

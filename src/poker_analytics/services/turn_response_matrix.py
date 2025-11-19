@@ -64,21 +64,42 @@ SPR_BUCKET_OPTIONS: Sequence[Mapping[str, str]] = (
 SPR_BUCKET_ORDER = {"any": 0, **{option["key"]: index + 1 for index, option in enumerate(SPR_BUCKET_OPTIONS)}}
 SPR_BUCKET_KEYS = set(SPR_BUCKET_ORDER.keys())
 
-def load_turn_response_matrix() -> dict:
+
+def _load_cached_payload(cache_dir: Path, filename: str, *, source: str | None = None) -> dict | None:
+    if source:
+        candidates = [
+            cache_dir / source / filename,
+            cache_dir / filename,
+        ]
+    else:
+        candidates = [cache_dir / filename]
+
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("version") == CURRENT_VERSION:
+            return payload
+    return None
+
+
+def load_turn_response_matrix(source: str | None = None) -> dict:
     """Return the aggregated payload used by the frontend heatmap."""
 
     stake_policy = StakePolicy.from_environment()
     data_paths = build_data_paths()
-    cache_path = data_paths.cache_dir / f"turn_response_matrix_{stake_policy.cache_token()}.json"
+    filename = f"turn_response_matrix_{stake_policy.cache_token()}.json"
 
-    if cache_path.exists():
-        try:
-            with cache_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if payload.get("version") == CURRENT_VERSION:
-                return payload
-        except (OSError, json.JSONDecodeError):
-            pass
+    cached = _load_cached_payload(data_paths.cache_dir, filename, source=source)
+    if cached is not None:
+        return cached
+
+    if source is not None:
+        return build_turn_response_payload([])
 
     data_paths.ensure_cache_dir()
 
@@ -86,6 +107,7 @@ def load_turn_response_matrix() -> dict:
     payload = build_turn_response_payload(events)
 
     try:
+        cache_path = data_paths.cache_dir / filename
         with cache_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, separators=(",", ":"))
     except OSError:
@@ -370,21 +392,19 @@ def _normalise_response(value: object) -> Optional[str]:
     return None
 
 
-def load_turn_pot_contribution() -> dict:
+def load_turn_pot_contribution(source: str | None = None) -> dict:
     """Return average pot contribution per bet-size bucket for turn bets."""
 
     stake_policy = StakePolicy.from_environment()
     data_paths = build_data_paths()
-    cache_path = data_paths.cache_dir / f"turn_pot_contribution_{stake_policy.cache_token()}.json"
+    filename = f"turn_pot_contribution_{stake_policy.cache_token()}.json"
 
-    if cache_path.exists():
-        try:
-            with cache_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if payload.get("version") == CURRENT_VERSION:
-                return payload
-        except (OSError, json.JSONDecodeError):
-            pass
+    cached = _load_cached_payload(data_paths.cache_dir, filename, source=source)
+    if cached is not None:
+        return cached
+
+    if source is not None:
+        return build_turn_pot_contribution_payload([])
 
     data_paths.ensure_cache_dir()
 
@@ -392,6 +412,7 @@ def load_turn_pot_contribution() -> dict:
     payload = build_turn_pot_contribution_payload(events)
 
     try:
+        cache_path = data_paths.cache_dir / filename
         with cache_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, separators=(",", ":"))
     except OSError:

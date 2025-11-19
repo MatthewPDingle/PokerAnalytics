@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
 from poker_analytics.config import build_data_paths
@@ -23,7 +24,7 @@ from poker_analytics.services.flop_preflop_utils import (
 )
 from poker_analytics.services.flop_response_matrix_builder import collect_river_bet_events
 
-HAND_TYPE_ORDER: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES)
+HAND_TYPE_ORDER: Sequence[str] = tuple(PRIMARY_HAND_TYPES) + tuple(DRAW_CATEGORIES) + ("Unknown",)
 HAND_TYPE_SET = set(HAND_TYPE_ORDER)
 
 BET_LINE_ORDER: Sequence[str] = (
@@ -82,21 +83,41 @@ SPR_BUCKET_ORDER = {SPR_ANY_KEY: 0, **{option["key"]: index + 1 for index, optio
 SPR_BUCKET_KEYS = {option["key"] for option in SPR_BUCKET_OPTIONS}
 
 
-def load_river_responder_hand_matrix() -> dict:
+def _load_cached_payload(cache_dir: Path, filename: str, *, source: str | None = None) -> dict | None:
+    if source:
+        candidates = [
+            cache_dir / source / filename,
+            cache_dir / filename,
+        ]
+    else:
+        candidates = [cache_dir / filename]
+
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("version") == CURRENT_VERSION:
+            return payload
+    return None
+
+
+def load_river_responder_hand_matrix(source: str | None = None) -> dict:
     """Return aggregated responder hand distributions by river bet sizing."""
 
     stake_policy = StakePolicy.from_environment()
     data_paths = build_data_paths()
-    cache_path = data_paths.cache_dir / f"river_responder_hand_matrix_{stake_policy.cache_token()}.json"
+    filename = f"river_responder_hand_matrix_{stake_policy.cache_token()}.json"
 
-    if cache_path.exists():
-        try:
-            with cache_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if payload.get("version") == CURRENT_VERSION:
-                return payload
-        except (OSError, json.JSONDecodeError):
-            pass
+    cached = _load_cached_payload(data_paths.cache_dir, filename, source=source)
+    if cached is not None:
+        return cached
+
+    if source is not None:
+        return _aggregate([])
 
     data_paths.ensure_cache_dir()
 
@@ -104,6 +125,7 @@ def load_river_responder_hand_matrix() -> dict:
     payload = _aggregate(events)
 
     try:
+        cache_path = data_paths.cache_dir / filename
         with cache_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, separators=(",", ":"))
     except OSError:
@@ -172,7 +194,7 @@ def _aggregate(events: Iterable[Mapping[str, object]]) -> dict:
                 continue
             primary = response.get("hand_primary")
             if not isinstance(primary, str) or primary not in HAND_TYPE_SET:
-                continue
+                primary = "Unknown"
             has_flush_draw = bool(response.get("has_flush_draw"))
             has_oesd_dg = bool(response.get("has_oesd_dg"))
 

@@ -195,15 +195,26 @@ const transformPayload = (payload: RawPayload): HookState => ({
   usingSample: false,
 });
 
-export const useLineExplorer = () => {
+export const useLineExplorer = (sourceKey: string | null) => {
   const [state, setState] = useState<HookState>(INITIAL_STATE);
 
   useEffect(() => {
     let active = true;
 
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
+
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/lines/explorer');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/lines/explorer?source=${encodeURIComponent(sourceKey)}`
+            : '/api/lines/explorer';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -225,7 +236,7 @@ export const useLineExplorer = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

@@ -270,8 +270,15 @@ def load_response_curve_scenarios(
     return list(_SAMPLE_SCENARIOS)
 
 
-def get_response_curve_payload(cache_path: Path | None = None) -> list[dict]:
+def get_response_curve_payload(source: str | None = None, cache_path: Path | None = None) -> list[dict]:
     """Return serialised response-curve scenarios ready for JSON output."""
+
+    if cache_path is None:
+        base_dir = build_data_paths().cache_dir
+        if source:
+            cache_path = base_dir / source / "preflop_response_curves.json"
+        else:
+            cache_path = base_dir / "preflop_response_curves.json"
 
     scenarios = load_response_curve_scenarios(cache_path=cache_path)
     return _serialise_scenarios(scenarios)

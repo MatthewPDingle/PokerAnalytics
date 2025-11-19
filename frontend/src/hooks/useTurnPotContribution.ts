@@ -153,14 +153,18 @@ const transform = (payload: RawPayload): HookState => {
   };
 };
 
-const useTurnPotContribution = (): HookState => {
+const useTurnPotContribution = (sourceKey: string | null): HookState => {
   const [state, setState] = useState<HookState>(INITIAL_STATE);
 
   useEffect(() => {
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/turn/pot-contribution');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/turn/pot-contribution?source=${encodeURIComponent(sourceKey)}`
+            : '/api/turn/pot-contribution';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -200,7 +204,7 @@ const useTurnPotContribution = (): HookState => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

@@ -30,6 +30,7 @@ import {
   deriveDescriptorFromTable,
   tableComposerReducer,
 } from '../state/tableComposer';
+import { useActiveDataSource } from '../hooks/useActiveDataSource';
 
 const NORMALIZED_BUCKETS: LineBucketMeta[] = [
   { key: 'check', label: 'Check' },
@@ -519,6 +520,7 @@ const deriveRowGradientPurple = (value: number, rowMax: number, rowMin = 0) =>
 const deriveRowGradientBlue = (value: number, rowMax: number, rowMin = 0) =>
   deriveRowGradientFromBase(value, rowMax, rowMin, { r: 66, g: 153, b: 225 });
 const LineExplorer = () => {
+  const { activeSourceKey } = useActiveDataSource();
   const [composerState, dispatch] = useReducer(tableComposerReducer, undefined, () => createInitialTableComposerState());
   const [highlightContext, setHighlightContext] = useState<HighlightContextSummary | null>(null);
   const [groupedHandView, setGroupedHandView] = useState(true);
@@ -640,7 +642,7 @@ const LineExplorer = () => {
   }, [composerState, parsedHighlight]);
 
   const shouldQuery = highlightContext !== null;
-  const { data, loading, error, usingSample } = useLineQuery(shouldQuery ? descriptorPayload : null);
+  const { data, loading, error, usingSample } = useLineQuery(shouldQuery ? descriptorPayload : null, activeSourceKey);
   const isLoadingResults = shouldQuery && loading;
 
   const rawBucketOrder = data?.bucket_order;

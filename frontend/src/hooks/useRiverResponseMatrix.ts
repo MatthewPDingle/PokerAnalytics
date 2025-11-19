@@ -355,15 +355,26 @@ const SAMPLE_STATE: HookState = {
   usingSample: true,
 };
 
-export const useRiverResponseMatrix = () => {
+export const useRiverResponseMatrix = (sourceKey: string | null) => {
   const [state, setState] = useState<HookState>(initialState);
 
   useEffect(() => {
     let active = true;
 
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
+
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/river/response-matrix');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/river/response-matrix?source=${encodeURIComponent(sourceKey)}`
+            : '/api/river/response-matrix';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -386,7 +397,7 @@ export const useRiverResponseMatrix = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

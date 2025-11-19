@@ -22,13 +22,10 @@ import {
   Switch,
 } from '@chakra-ui/react';
 
-import {
-  SelectOption,
-  TurnResponseScenario,
-  useTurnResponseMatrix,
-} from '../hooks/useTurnResponseMatrix';
+import { SelectOption, TurnResponseScenario, useTurnResponseMatrix } from '../hooks/useTurnResponseMatrix';
 import useTurnHandMatrix from '../hooks/useTurnHandMatrix';
 import useTurnResponderHandMatrix from '../hooks/useTurnResponderHandMatrix';
+import { useActiveDataSource } from '../hooks/useActiveDataSource';
 
 type TableRowKey = 'foldPct' | 'callPct' | 'raisePct' | 'continuePct';
 
@@ -158,6 +155,7 @@ const HAND_MEMBER_KEYS = [
   'Quads',
   'Flush Draw',
   'OESD/DG',
+  'Unknown',
 ];
 
 const HAND_TYPE_DEFINITIONS = [
@@ -175,6 +173,7 @@ const HAND_TYPE_DEFINITIONS = [
   { key: 'quads', label: 'Quads', members: ['Quads'] },
   { key: 'flush_draw', label: 'Flush Draw', members: ['Flush Draw'] },
   { key: 'oesd_dg', label: 'OESD/DG', members: ['OESD/DG'] },
+  { key: 'unknown', label: 'Unknown', members: ['Unknown'] },
 ];
 
 const HAND_GROUP_DEFINITIONS = [
@@ -186,6 +185,7 @@ const HAND_GROUP_DEFINITIONS = [
   { key: 'trips_set', label: 'Trips/Set', members: ['Trips/Set'] },
   { key: 'monster', label: 'Monster', members: ['Straight', 'Flush', 'Full House', 'Quads'] },
   { key: 'draw', label: 'Draw', members: ['Flush Draw', 'OESD/DG'] },
+  { key: 'unknown', label: 'Unknown', members: ['Unknown'] },
 ];
 
 const combineScenarios = (scenarios: TurnResponseScenario[]) => {
@@ -233,6 +233,7 @@ const toBucketEntries = (bucketKeys: string[], aggregates: Map<string, BucketAgg
 };
 
 const TurnResponseMatrix = () => {
+  const { activeSourceKey } = useActiveDataSource();
   const {
     data,
     bucketOrder,
@@ -245,7 +246,7 @@ const TurnResponseMatrix = () => {
     loading,
     error,
     usingSample,
-  } = useTurnResponseMatrix();
+  } = useTurnResponseMatrix(activeSourceKey);
 
   const [heroPosition, setHeroPosition] = useState('');
   const [betLine, setBetLine] = useState('');
@@ -265,7 +266,7 @@ const TurnResponseMatrix = () => {
     loading: handLoading,
     error: handError,
     usingSample: handUsingSample,
-  } = useTurnHandMatrix();
+  } = useTurnHandMatrix(activeSourceKey);
 
   const {
     data: responderData,
@@ -273,7 +274,7 @@ const TurnResponseMatrix = () => {
     error: responderError,
     usingSample: responderUsingSample,
     responseTypes: responderResponseTypes,
-  } = useTurnResponderHandMatrix();
+  } = useTurnResponderHandMatrix(activeSourceKey);
 
 
   const filteredBucketOrder = useMemo(
@@ -970,15 +971,15 @@ const TurnResponseMatrix = () => {
   }
 
   return (
-    <Box as="main" px={{ base: 4, md: 8 }} py={{ base: 8, md: 12 }}>
+    <Box as="div" px={{ base: 4, md: 8 }} py={0} m={0}>
       <Stack spacing={6} maxW="1200px" mx="auto">
         <Box
           position="sticky"
-          top="0"
+          top="65px"
           zIndex="docked"
           bg="gray.900"
-          pt={{ base: 4, md: 6 }}
-          pb={{ base: 4, md: 5 }}
+          pt={0}
+          pb={{ base: 3, md: 4 }}
           borderBottom="1px solid"
           borderColor="whiteAlpha.200"
         >

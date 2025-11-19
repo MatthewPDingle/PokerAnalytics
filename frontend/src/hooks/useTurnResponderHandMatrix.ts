@@ -267,15 +267,26 @@ const transformPayload = (payload: RawResponderPayload): ResponderMatrixState =>
   usingSample: false,
 });
 
-export const useTurnResponderHandMatrix = () => {
+export const useTurnResponderHandMatrix = (sourceKey: string | null) => {
   const [state, setState] = useState<ResponderMatrixState>(INITIAL_STATE);
 
   useEffect(() => {
     let active = true;
 
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
+
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/turn/responder-hand-matrix');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/turn/responder-hand-matrix?source=${encodeURIComponent(sourceKey)}`
+            : '/api/turn/responder-hand-matrix';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -297,7 +308,7 @@ export const useTurnResponderHandMatrix = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

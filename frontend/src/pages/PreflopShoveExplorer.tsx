@@ -2,6 +2,7 @@ import { Box, Flex, Heading, SimpleGrid, Spinner, Stack, Text } from '@chakra-ui
 import RangeGrid from '../components/RangeGrid';
 import ValueGrid from '../components/ValueGrid';
 import { usePreflopShoveData } from '../hooks/usePreflopShoveData';
+import { useActiveDataSource } from '../hooks/useActiveDataSource';
 
 const EV_DISABLED_IDS = new Set(['three_bet_shove', 'four_bet_shove', 'five_plus_bet_shove']);
 const EQUITY_SECTION_ORDER = [
@@ -35,7 +36,8 @@ const SummaryList = ({
 );
 
 const PreflopShoveExplorer = () => {
-  const { loading, error, ranges, equity } = usePreflopShoveData();
+  const { activeSourceKey } = useActiveDataSource();
+  const { loading, error, ranges, equity } = usePreflopShoveData(activeSourceKey);
 
   const equityById = new Map(equity.map((item) => [item.id, item]));
   const orderedRanges = [...ranges].sort((a, b) => {

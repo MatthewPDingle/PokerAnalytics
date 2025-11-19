@@ -395,7 +395,7 @@ const SAMPLE_RESPONSE: LineQueryResponse = {
 };
 const cloneSampleResponse = (): LineQueryResponse => JSON.parse(JSON.stringify(SAMPLE_RESPONSE));
 
-export const useLineQuery = (descriptor: LineQueryRequest | null) => {
+export const useLineQuery = (descriptor: LineQueryRequest | null, sourceKey: string | null) => {
   const [state, setState] = useState<HookState>(INITIAL_STATE);
 
   const descriptorKey = useMemo(
@@ -418,7 +418,11 @@ export const useLineQuery = (descriptor: LineQueryRequest | null) => {
 
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/lines/query', {
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/lines/query?source=${encodeURIComponent(sourceKey)}`
+            : '/api/lines/query';
+        const response = await fetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -460,7 +464,7 @@ export const useLineQuery = (descriptor: LineQueryRequest | null) => {
     return () => {
       controller.abort();
     };
-  }, [descriptor, descriptorKey]);
+  }, [descriptor, descriptorKey, sourceKey]);
 
   return useMemo(() => state, [state]);
 };

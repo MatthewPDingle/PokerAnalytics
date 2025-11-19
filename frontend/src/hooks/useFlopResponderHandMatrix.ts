@@ -265,15 +265,26 @@ const transformPayload = (payload: RawResponderPayload): ResponderMatrixState =>
   usingSample: false,
 });
 
-export const useFlopResponderHandMatrix = () => {
+export const useFlopResponderHandMatrix = (sourceKey: string | null) => {
   const [state, setState] = useState<ResponderMatrixState>(INITIAL_STATE);
 
   useEffect(() => {
     let active = true;
 
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
+
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/flop/responder-hand-matrix');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/flop/responder-hand-matrix?source=${encodeURIComponent(sourceKey)}`
+            : '/api/flop/responder-hand-matrix';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -295,7 +306,7 @@ export const useFlopResponderHandMatrix = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

@@ -29,6 +29,7 @@ import {
   PotBucketOption,
   useResponseCurves,
 } from '../hooks/useResponseCurves';
+import { useActiveDataSource } from '../hooks/useActiveDataSource';
 
 const formatPercent = (value: number) => `${value.toFixed(1)}%`;
 const formatBb = (value: number, digits = 2) => `${value.toFixed(digits)} bb`;
@@ -129,6 +130,7 @@ const emptyFilters: FilterState = {
 };
 
 const PreflopResponseCurves = () => {
+  const { activeSourceKey } = useActiveDataSource();
   const {
     data,
     loading,
@@ -139,7 +141,7 @@ const PreflopResponseCurves = () => {
     potBuckets,
     playersBehindOptions,
     vpipAheadOptions,
-  } = useResponseCurves();
+  } = useResponseCurves(activeSourceKey);
 
   const [filters, setFilters] = useState<FilterState>(emptyFilters);
   const [initialized, setInitialized] = useState(false);

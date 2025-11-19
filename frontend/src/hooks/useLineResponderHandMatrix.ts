@@ -185,15 +185,26 @@ const transformPayload = (payload: RawPayload): HookState => ({
   usingSample: false,
 });
 
-export const useLineResponderHandMatrix = () => {
+export const useLineResponderHandMatrix = (sourceKey: string | null) => {
   const [state, setState] = useState<HookState>(INITIAL_STATE);
 
   useEffect(() => {
     let active = true;
 
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
+
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/lines/responder-hand-matrix');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/lines/responder-hand-matrix?source=${encodeURIComponent(sourceKey)}`
+            : '/api/lines/responder-hand-matrix';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -215,7 +226,7 @@ export const useLineResponderHandMatrix = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

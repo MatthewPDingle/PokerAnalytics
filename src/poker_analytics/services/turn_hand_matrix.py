@@ -78,21 +78,46 @@ SPR_BUCKET_ORDER = {SPR_ANY_KEY: 0, **{option["key"]: index + 1 for index, optio
 SPR_BUCKET_KEYS = {option["key"] for option in SPR_BUCKET_OPTIONS}
 
 
-def load_turn_hand_matrix() -> dict:
+def _load_cached_payload(cache_dir: Path, filename: str, *, source: str | None = None) -> dict | None:
+    """Load a cached payload for the given stake + optional source.
+
+    When a concrete ``source`` key is provided (e.g. ``pokerstars_nl10``) we
+    only read from the corresponding subdirectory. This avoids accidentally
+    falling back to the default DriveHUD cache when a per-source cache has not
+    been generated yet.
+    """
+
+    if source:
+        candidates = [cache_dir / source / filename]
+    else:
+        candidates = [cache_dir / filename]
+
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("version") == CURRENT_VERSION:
+            return payload
+    return None
+
+
+def load_turn_hand_matrix(source: str | None = None) -> dict:
     """Return aggregated hero hand distributions by turn bet sizing."""
 
     stake_policy = StakePolicy.from_environment()
     data_paths = build_data_paths()
-    cache_path = data_paths.cache_dir / f"turn_hand_matrix_{stake_policy.cache_token()}.json"
+    filename = f"turn_hand_matrix_{stake_policy.cache_token()}.json"
 
-    if cache_path.exists():
-        try:
-            with cache_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if payload.get("version") == CURRENT_VERSION:
-                return payload
-        except (OSError, json.JSONDecodeError):
-            pass
+    cached = _load_cached_payload(data_paths.cache_dir, filename, source=source)
+    if cached is not None:
+        return cached
+
+    if source is not None:
+        return _aggregate([])
 
     data_paths.ensure_cache_dir()
 
@@ -100,6 +125,7 @@ def load_turn_hand_matrix() -> dict:
     payload = _aggregate(events)
 
     try:
+        cache_path = data_paths.cache_dir / filename
         with cache_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, separators=(",", ":"))
     except OSError:

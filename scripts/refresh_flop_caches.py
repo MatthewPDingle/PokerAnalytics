@@ -23,6 +23,8 @@ from poker_analytics.services.cache_refresh import (
     refresh_turn_caches,
     refresh_river_caches,
 )
+from poker_analytics.services.flop_hand_matrix import load_flop_hand_matrix
+from poker_analytics.services.flop_responder_hand_matrix import load_flop_responder_hand_matrix
 
 
 def _remove_matching(cache_dir: Path, patterns: Iterable[str]) -> list[Path]:
@@ -72,11 +74,25 @@ def main(argv: list[str] | None = None) -> int:
         print("Skipped rebuilding response matrices (--skip-build).")
     else:
         flop_destination = refresh_flop_caches(max_hands=args.max_hands, rebuild=True)
-        turn_destination = refresh_turn_caches(max_hands=args.max_hands, rebuild=True)
-        river_destination = refresh_river_caches(max_hands=args.max_hands, rebuild=True)
         print(f"Flop caches cleared and response matrix rebuilt: {flop_destination}")
-        print(f"Turn caches cleared and response matrix rebuilt: {turn_destination}")
-        print(f"River caches cleared and response matrix rebuilt: {river_destination}")
+
+        # Warm flop hand-matrix caches so the Flop Response Matrix page
+        # does not have to build them on first load.
+        try:
+            _ = load_flop_hand_matrix()
+            _ = load_flop_responder_hand_matrix()
+            print("Flop hand matrices (bettor + responder) cache ensured.")
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"Warning: unable to warm flop hand matrices: {exc}")
+
+        # NOTE: Turn/river cache rebuilds are temporarily disabled while the
+        # turn/river event builders are being refactored for hero-exclusion
+        # semantics. Existing turn/river caches remain valid; when needed,
+        # introduce dedicated refresh scripts or re-enable the calls below:
+        # turn_destination = refresh_turn_caches(max_hands=args.max_hands, rebuild=True)
+        # river_destination = refresh_river_caches(max_hands=args.max_hands, rebuild=True)
+        # print(f"Turn caches cleared and response matrix rebuilt: {turn_destination}")
+        # print(f"River caches cleared and response matrix rebuilt: {river_destination}")
 
     return 0
 

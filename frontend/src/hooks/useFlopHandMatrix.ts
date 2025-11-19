@@ -263,14 +263,26 @@ const transform = (payload: RawPayload): HandMatrixState => {
   };
 };
 
-export const useFlopHandMatrix = (): HandMatrixState => {
+export const useFlopHandMatrix = (sourceKey: string | null): HandMatrixState => {
   const [state, setState] = useState<HandMatrixState>(INITIAL_STATE);
 
   useEffect(() => {
     let cancelled = false;
+
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
+
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/flop/hand-types');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/flop/hand-types?source=${encodeURIComponent(sourceKey)}`
+            : '/api/flop/hand-types';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -313,7 +325,7 @@ export const useFlopHandMatrix = (): HandMatrixState => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

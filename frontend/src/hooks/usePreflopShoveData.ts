@@ -46,7 +46,7 @@ const fetchJson = async <T,>(url: string): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
-export const usePreflopShoveData = (): PreflopShoveData => {
+export const usePreflopShoveData = (sourceKey: string | null): PreflopShoveData => {
   const [ranges, setRanges] = useState<ShoveRange[]>([]);
   const [equity, setEquity] = useState<ShoveEquity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,10 +56,18 @@ export const usePreflopShoveData = (): PreflopShoveData => {
     let cancelled = false;
 
     const load = async () => {
+      setLoading(true);
+      setError(undefined);
       try {
+        const baseRangesUrl = '/api/preflop/shove/ranges';
+        const baseEquityUrl = '/api/preflop/shove/equity';
+        const suffix =
+          sourceKey && sourceKey.trim().length > 0
+            ? `?source=${encodeURIComponent(sourceKey)}`
+            : '';
         const [rangeData, equityData] = await Promise.all([
-          fetchJson<ShoveRange[]>('/api/preflop/shove/ranges'),
-          fetchJson<ShoveEquity[]>('/api/preflop/shove/equity'),
+          fetchJson<ShoveRange[]>(`${baseRangesUrl}${suffix}`),
+          fetchJson<ShoveEquity[]>(`${baseEquityUrl}${suffix}`),
         ]);
         if (!cancelled) {
           setRanges(rangeData);
@@ -80,7 +88,7 @@ export const usePreflopShoveData = (): PreflopShoveData => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   return { loading, error, ranges, equity };
 };

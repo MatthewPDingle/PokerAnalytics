@@ -151,14 +151,18 @@ const transform = (payload: RawPayload): HookState => {
   };
 };
 
-const useFlopPotContribution = (): HookState => {
+const useFlopPotContribution = (sourceKey: string | null): HookState => {
   const [state, setState] = useState<HookState>(INITIAL_STATE);
 
   useEffect(() => {
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/flop/pot-contribution');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/flop/pot-contribution?source=${encodeURIComponent(sourceKey)}`
+            : '/api/flop/pot-contribution';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -198,7 +202,7 @@ const useFlopPotContribution = (): HookState => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

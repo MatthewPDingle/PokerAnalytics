@@ -355,15 +355,26 @@ const SAMPLE_STATE: HookState = {
   usingSample: true,
 };
 
-export const useFlopResponseMatrix = () => {
+export const useFlopResponseMatrix = (sourceKey: string | null) => {
   const [state, setState] = useState<HookState>(initialState);
 
   useEffect(() => {
     let active = true;
 
+    setState((prev) => ({
+      ...prev,
+      loading: true,
+      error: null,
+      usingSample: false,
+    }));
+
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/flop/response-matrix');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/flop/response-matrix?source=${encodeURIComponent(sourceKey)}`
+            : '/api/flop/response-matrix';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
@@ -386,7 +397,7 @@ export const useFlopResponseMatrix = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sourceKey]);
 
   return useMemo(() => state, [state]);
 };

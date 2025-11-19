@@ -179,7 +179,7 @@ const compareByOrder = (order: readonly string[]) => (a: string, b: string) => {
   return a.localeCompare(b);
 };
 
-export const useResponseCurves = () => {
+export const useResponseCurves = (sourceKey: string | null) => {
   const [data, setData] = useState<ResponseCurveScenario[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -188,9 +188,17 @@ export const useResponseCurves = () => {
   useEffect(() => {
     let cancelled = false;
 
+    setLoading(true);
+    setError(null);
+    setUsingSample(false);
+
     const load = async () => {
       try {
-        const response = await fetch('/api/preflop/response-curves');
+        const url =
+          sourceKey && sourceKey.trim().length > 0
+            ? `/api/preflop/response-curves?source=${encodeURIComponent(sourceKey)}`
+            : '/api/preflop/response-curves';
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Failed to load response curves: ${response.status}`);
         }
@@ -205,7 +213,7 @@ export const useResponseCurves = () => {
         if (!cancelled) {
           setData(SAMPLE_RESPONSE_CURVES);
           setUsingSample(true);
-          setError((err as Error).message);
+          setError(err instanceof Error ? err.message : 'Failed to load response curves');
         }
       } finally {
         if (!cancelled) {
@@ -219,7 +227,7 @@ export const useResponseCurves = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sourceKey]);
 
   const metadata = useMemo(() => {
     const heroPositionsSet = new Set<string>();

@@ -29,6 +29,7 @@ import {
 } from '../hooks/useFlopResponseMatrix';
 import useFlopHandMatrix from '../hooks/useFlopHandMatrix';
 import useFlopResponderHandMatrix from '../hooks/useFlopResponderHandMatrix';
+import { useActiveDataSource } from '../hooks/useActiveDataSource';
 
 type TableRowKey = 'foldPct' | 'callPct' | 'raisePct' | 'continuePct';
 
@@ -158,6 +159,7 @@ const HAND_MEMBER_KEYS = [
   'Quads',
   'Flush Draw',
   'OESD/DG',
+  'Unknown',
 ];
 
 const HAND_TYPE_DEFINITIONS = [
@@ -175,6 +177,7 @@ const HAND_TYPE_DEFINITIONS = [
   { key: 'quads', label: 'Quads', members: ['Quads'] },
   { key: 'flush_draw', label: 'Flush Draw', members: ['Flush Draw'] },
   { key: 'oesd_dg', label: 'OESD/DG', members: ['OESD/DG'] },
+  { key: 'unknown', label: 'Unknown', members: ['Unknown'] },
 ];
 
 const HAND_GROUP_DEFINITIONS = [
@@ -186,6 +189,7 @@ const HAND_GROUP_DEFINITIONS = [
   { key: 'trips_set', label: 'Trips/Set', members: ['Trips/Set'] },
   { key: 'monster', label: 'Monster', members: ['Straight', 'Flush', 'Full House', 'Quads'] },
   { key: 'draw', label: 'Draw', members: ['Flush Draw', 'OESD/DG'] },
+  { key: 'unknown', label: 'Unknown', members: ['Unknown'] },
 ];
 
 const combineScenarios = (scenarios: FlopResponseScenario[]) => {
@@ -233,6 +237,7 @@ const toBucketEntries = (bucketKeys: string[], aggregates: Map<string, BucketAgg
 };
 
 const FlopResponseMatrix = () => {
+  const { activeSourceKey } = useActiveDataSource();
   const {
     data,
     bucketOrder,
@@ -245,7 +250,7 @@ const FlopResponseMatrix = () => {
     loading,
     error,
     usingSample,
-  } = useFlopResponseMatrix();
+  } = useFlopResponseMatrix(activeSourceKey);
 
   const [heroPosition, setHeroPosition] = useState('');
   const [betType, setBetType] = useState('');
@@ -265,7 +270,7 @@ const FlopResponseMatrix = () => {
     loading: handLoading,
     error: handError,
     usingSample: handUsingSample,
-  } = useFlopHandMatrix();
+  } = useFlopHandMatrix(activeSourceKey);
 
   const {
     data: responderData,
@@ -273,7 +278,7 @@ const FlopResponseMatrix = () => {
     error: responderError,
     usingSample: responderUsingSample,
     responseTypes: responderResponseTypes,
-  } = useFlopResponderHandMatrix();
+  } = useFlopResponderHandMatrix(activeSourceKey);
 
 
   const filteredBucketOrder = useMemo(
@@ -960,15 +965,15 @@ const FlopResponseMatrix = () => {
   }
 
   return (
-    <Box as="main" px={{ base: 4, md: 8 }} py={{ base: 8, md: 12 }}>
+    <Box as="div" px={{ base: 4, md: 8 }} py={0} m={0}>
       <Stack spacing={6} maxW="1200px" mx="auto">
         <Box
           position="sticky"
-          top="0"
+          top="65px"
           zIndex="docked"
           bg="gray.900"
-          pt={{ base: 4, md: 6 }}
-          pb={{ base: 4, md: 5 }}
+          pt={0}
+          pb={{ base: 3, md: 4 }}
           borderBottom="1px solid"
           borderColor="whiteAlpha.200"
         >

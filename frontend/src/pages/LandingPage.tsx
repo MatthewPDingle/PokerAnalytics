@@ -18,6 +18,11 @@ const CORE_PAGES = [
     to: '/preflop-shove-explorer',
   },
   {
+    title: 'Action Quick Reference',
+    description: 'Shortcut recommendations for bluff and value bet sizes across flop, turn, and river based on response matrices.',
+    to: '/actions/quick-reference',
+  },
+  {
     title: 'Flop Response Matrix',
     description: 'Villain fold/call/raise rates by flop bet size with classification and position filters.',
     to: '/flop/response-matrix',

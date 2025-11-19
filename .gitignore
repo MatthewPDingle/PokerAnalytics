@@ -5,6 +5,13 @@ __pycache__/
 # Local data caches and databases
 var/
 drivehud/
+data/
+
+# Local SQLite and JSON cache files that should never be committed
+*.db
+*.sqlite
+*.sqlite3
+*.json
 
 # Generated artifacts
 .cache/
